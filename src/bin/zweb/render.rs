@@ -86,6 +86,8 @@ const CACHE_BYTES: usize = 64 << 20;
 const SETTLE: Duration = Duration::from_millis(150);
 /// Terminal columns per tile, about.
 const TILE_COLS: usize = 16;
+/// A prediction is shown with at most this many rows not known yet.
+const MAX_UNKNOWN_ROWS: usize = 3;
 
 struct Cached {
     id: u32,
@@ -105,6 +107,97 @@ struct Prediction {
     /// Shown on screen; else only checked against the page's frames, to
     /// learn whether predictions are right again.
     shown: bool,
+    /// Where row 0 of `base` is in the page (rows of the tape).
+    base_offset: Option<i64>,
+    /// What is on screen for the whole shift, tape tiles included.
+    target: Vec<u64>,
+}
+
+/// Rows of the page seen before, by their place in it: a jump back to
+/// them (page up, then down) is shown at once too.
+#[derive(Default)]
+struct Tape {
+    /// Where screen row 0 is in the page, when known.
+    offset: Option<i64>,
+    rows: HashMap<i64, Vec<u64>>,
+    /// A distinctive row's signature to its place; AMBIGUOUS if in two.
+    places: HashMap<u64, i64>,
+    /// Where a part of the page not linked to the rest starts.
+    next_island: i64,
+    /// Where the frame being drawn was expected to be (after a scroll).
+    expect: Option<i64>,
+}
+
+const AMBIGUOUS: i64 = i64::MIN;
+
+impl Tape {
+    fn clear(&mut self) {
+        self.offset = None;
+        self.rows.clear();
+        self.places.clear();
+        self.expect = None;
+    }
+
+    /// The signature of a row: its tiles that scroll, if they are not all
+    /// alike (an empty row is everywhere).
+    fn signature(tiles: &[u64], fixed: &[bool]) -> Option<u64> {
+        let moving: Vec<u64> = tiles.iter().zip(fixed).filter(|(_, f)| !**f).map(|(t, _)| *t).collect();
+        if moving.windows(2).all(|w| w[0] == w[1]) {
+            return None;
+        }
+        Some(xxhash_rust::xxh3::xxh3_64(&moving.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<u8>>()))
+    }
+
+    /// Finds where the frame `real` is in the page, and records its rows.
+    fn record(&mut self, real: &[u64], fixed: &[bool], bands: usize, before: &[Option<u64>]) {
+        let n = real.len() / bands;
+        let sig = |r: usize| Tape::signature(&real[r * bands..(r + 1) * bands], &fixed[r * bands..(r + 1) * bands]);
+        let mut votes: HashMap<i64, usize> = HashMap::new();
+        for r in 0..n {
+            if let Some(&v) = sig(r).and_then(|s| self.places.get(&s)) {
+                if v != AMBIGUOUS {
+                    *votes.entry(v - r as i64).or_default() += 1;
+                }
+            }
+        }
+        let expect = self.expect.take();
+        let for_expect = expect.and_then(|e| votes.get(&e).copied()).unwrap_or(0);
+        // The scroll asked for, unless the rows clearly say another place.
+        let voted = votes
+            .into_iter()
+            .max_by_key(|(o, c)| (*c, Some(*o) == expect))
+            .filter(|(o, c)| *c >= 3 && (expect.is_none() || Some(*o) == expect || *c > 2 * for_expect + 3))
+            .map(|(o, _)| o);
+        let unchanged = before.len() == real.len() && before.iter().zip(real).filter(|(a, b)| **a == Some(**b)).count() * 2 > real.len();
+        self.offset = voted.or(expect).or(if unchanged { self.offset } else { None }).or_else(|| {
+            self.next_island += 1 << 32;
+            Some(self.next_island)
+        });
+        let off = self.offset.unwrap();
+        crate::trace!("tape offset {off} (voted {voted:?}, unchanged {unchanged})");
+        if self.rows.len() > 50_000 {
+            self.rows.clear();
+            self.places.clear();
+        }
+        for r in 0..n {
+            let v = off + r as i64;
+            let row = &real[r * bands..(r + 1) * bands];
+            // What was there before is not there any more.
+            if let Some(old) = self.rows.insert(v, row.to_vec()).filter(|old| old != row) {
+                if let Some(s) = Tape::signature(&old, &fixed[r * bands..(r + 1) * bands]) {
+                    if self.places.get(&s) == Some(&v) {
+                        self.places.remove(&s);
+                    }
+                }
+            }
+            if let Some(s) = sig(r) {
+                let e = self.places.entry(s).or_insert(v);
+                if *e != v {
+                    *e = AMBIGUOUS;
+                }
+            }
+        }
+    }
 }
 
 /// What the terminal shows and holds: one image per cell row, kept by the
@@ -129,6 +222,7 @@ struct Rows {
     misses: u32,
     /// Right predictions in a row while not shown.
     hits: u32,
+    tape: Tape,
 }
 
 impl Rows {
@@ -147,6 +241,7 @@ impl Rows {
             bg_sent: None,
             misses: 0,
             hits: 0,
+            tape: Tape::default(),
         }
     }
 
@@ -158,6 +253,7 @@ impl Rows {
         self.bytes = 0;
         self.prediction = None;
         self.bg_sent = None;
+        self.tape.clear();
     }
 
     /// The cell row, first column and width in columns of tile `t`.
@@ -339,6 +435,7 @@ impl Renderer {
             if forget {
                 rows.fixed.fill(false);
                 rows.misses = 0;
+                rows.tape.clear();
             }
             if clear_popup {
                 if self.gfx == Gfx::Blocks {
@@ -409,7 +506,9 @@ impl Renderer {
             }
             let base = rows.shown.iter().map(|h| h.unwrap()).collect();
             let shown = self.predict_ok.load(Ordering::Relaxed);
-            rows.prediction = Some(Prediction { base, steps: Vec::new(), deadline: Instant::now(), held: None, shown });
+            let base_offset = rows.tape.offset;
+            rows.prediction =
+                Some(Prediction { base, steps: Vec::new(), deadline: Instant::now(), held: None, shown, base_offset, target: Vec::new() });
         }
         let pr = rows.prediction.as_mut().unwrap();
         let total = pr.steps.last().copied().unwrap_or(0) + delta;
@@ -418,7 +517,27 @@ impl Renderer {
         if !pr.shown {
             return;
         }
-        let target = shifted(&pr.base, &rows.fixed, rows.bands, total);
+        let bands = rows.bands;
+        let mut target = shifted(&pr.base, &rows.fixed, bands, total);
+        // Tiles scrolled in from beyond the screen: from the tape, if seen.
+        if let Some(off) = pr.base_offset {
+            for (t, h) in target.iter_mut().enumerate() {
+                if *h == BLANK && !rows.fixed[t] {
+                    let seen = rows.tape.rows.get(&(off + (t / bands) as i64 + total as i64)).map(|row| row[t % bands]);
+                    if let Some(tile) = seen.filter(|tile| rows.cache.contains_key(tile)) {
+                        *h = tile;
+                    }
+                }
+            }
+        }
+        // Never a screen of background: unknown rows wait for the page.
+        let unknown = target.iter().filter(|h| **h == BLANK).count();
+        pr.target = target.clone();
+        if unknown > MAX_UNKNOWN_ROWS * bands {
+            pr.shown = false;
+            crate::trace!("predict not shown: {} unknown tiles (base offset {:?}, total {total})", unknown, pr.base_offset);
+            return;
+        }
         if target.contains(&BLANK) && rows.bg_sent != Some(rows.bg) {
             let b64 = base64::engine::general_purpose::STANDARD.encode(rows.bg);
             out.extend_from_slice(format!("\x1b_Ga=t,f=24,s=1,v=1,i={BG_ID},q=2;{b64}\x1b\\").as_bytes());
@@ -441,33 +560,54 @@ impl Renderer {
         let real = Pixels::new(&frame).tile_hashes(layout.rows, layout.cols, rows.bands);
         let bands = rows.bands;
         let total = *pr.steps.last().unwrap();
-        // The shift this frame shows best: none yet, a step, or all of it.
-        let score = |s: i32| matches(&real, &shifted(&pr.base, &rows.fixed, bands, s));
-        let best = std::iter::once(0).chain(pr.steps.iter().copied()).max_by_key(|&s| (score(s), s == total)).unwrap();
-        let (best_score, total_score) = (score(best), score(total));
-        // Rows the full prediction knew (not background).
-        let movable = shifted(&pr.base, &rows.fixed, bands, total).iter().filter(|h| **h != BLANK).count().max(1);
+        // The shift this frame shows best: none yet, a step, or all of it,
+        // by the share of the tiles each would know that are right.
+        let share = |s: i32| {
+            let want = shifted(&pr.base, &rows.fixed, bands, s);
+            let known = want.iter().filter(|h| **h != BLANK).count();
+            (matches(&real, &want), known.max(1))
+        };
+        let better = |a: (usize, usize), b: (usize, usize)| a.0 * b.1 > b.0 * a.1;
+        let mut best = total;
+        for s in std::iter::once(0).chain(pr.steps.iter().copied()) {
+            if better(share(s), share(best)) {
+                best = s;
+            }
+        }
+        let ((best_score, movable), (mut total_score, mut total_known)) = (share(best), share(total));
+        // Judge a shown prediction by what was shown.
+        if pr.shown && pr.target.len() == real.len() {
+            total_known = pr.target.iter().filter(|h| **h != BLANK).count().max(1);
+            total_score = matches(&real, &pr.target);
+        }
         if pr.shown && best != total && best_score * 2 >= movable && Instant::now() < pr.deadline {
             rows.prediction.as_mut().unwrap().held = Some(frame);
             return None;
         }
         let pr = rows.prediction.take().unwrap();
-        // Learn the fixed rows: same as before though the rest moved.
-        if best == total && total != 0 {
-            for r in 0..real.len() {
-                let from = r as i64 + total as i64 * bands as i64;
+        let right = best == total && total_score * 3 >= total_known * 2;
+        if right {
+            rows.tape.expect = pr.base_offset.map(|o| o + total as i64);
+        }
+        // Learn the fixed tiles: same as before though the rest moved. Not
+        // from the page's background (blank tiles look the same anywhere).
+        if right && total != 0 {
+            let mut counts: HashMap<u64, usize> = HashMap::new();
+            pr.base.iter().for_each(|h| *counts.entry(*h).or_default() += 1);
+            let background = counts.into_iter().max_by_key(|(_, c)| *c).map(|(h, _)| h);
+            for t in 0..real.len() {
+                let from = t as i64 + total as i64 * bands as i64;
                 let inside = from >= 0 && (from as usize) < real.len();
-                // Something else would be here had the row scrolled (or nothing
+                // Something else would be here had the tile scrolled (or nothing
                 // known, at the edge it scrolled in from).
-                let other = !inside || pr.base[from as usize] != pr.base[r];
-                if real[r] == pr.base[r] && other {
-                    rows.fixed[r] = true;
-                } else if real[r] != pr.base[r] {
-                    rows.fixed[r] = false;
+                let other = !inside || pr.base[from as usize] != pr.base[t];
+                if real[t] == pr.base[t] && other && Some(real[t]) != background {
+                    rows.fixed[t] = true;
+                } else if real[t] != pr.base[t] {
+                    rows.fixed[t] = false;
                 }
             }
         }
-        let right = best == total && total_score * 3 >= movable * 2;
         if !pr.shown {
             rows.hits = if right { rows.hits + 1 } else { 0 };
             if rows.hits >= 3 {
@@ -480,10 +620,10 @@ impl Renderer {
             self.miss(rows);
         }
         if crate::trace::on() {
-            let want = shifted(&pr.base, &rows.fixed, bands, total);
+            let want = if pr.target.len() == real.len() { pr.target.clone() } else { shifted(&pr.base, &rows.fixed, bands, total) };
             let off: Vec<usize> = (0..real.len()).filter(|&r| want[r] != BLANK && want[r] != real[r]).collect();
             let fixed: Vec<usize> = (0..real.len()).filter(|&r| rows.fixed[r]).collect();
-            crate::trace!("settled{} best {best} of {total}, score {best_score} of {movable}, wrong rows {off:?}, fixed {fixed:?}", if pr.shown { "" } else { " (unshown)" });
+            crate::trace!("settled{} best {best} of {total}, score {total_score} of {total_known}, wrong rows {off:?}, fixed {fixed:?}", if pr.shown { "" } else { " (unshown)" });
         }
         Some(frame)
     }
@@ -511,6 +651,12 @@ impl Renderer {
         let (mut sent, mut moved) = (0u16, 0u16);
         let mut pixels = Pixels::new(frame);
         let hashes = pixels.tile_hashes(layout.rows, layout.cols, rows.bands);
+        // (bytes before, image keys, pixels) of each new tile, in order.
+        let mut parts: Vec<(Vec<u8>, String, Vec<u8>)> = Vec::new();
+        if self.gfx != Gfx::Blocks {
+            let before = rows.shown.clone();
+            rows.tape.record(&hashes, &rows.fixed, rows.bands, &before);
+        }
         // The page's background, for tiles not known yet: at the left edge of
         // the middle row (the bottom often is a fixed footer).
         let (br, bg, bb) = pixels.at(1, h as usize / 2);
@@ -543,9 +689,11 @@ impl Renderer {
             let rgb = pixels.rgb(x0, y0, x1 - x0, y1 - y0);
             out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
             let place = format!("p={},c={cols},r=1,C=1,q=2", t + 1);
-            self.transmit(&mut out, &format!("a=T,f=24,s={},v={},i={id},{place}", x1 - x0, y1 - y0), &rgb);
-            rows.bytes += rgb.len();
-            rows.cache.insert(hash, Cached { id, used: rows.clock, size: rgb.len() });
+            // Encoded below, on several threads.
+            let size = rgb.len();
+            parts.push((std::mem::take(&mut out), format!("a=T,f=24,s={},v={},i={id},{place}", x1 - x0, y1 - y0), rgb));
+            rows.bytes += size;
+            rows.cache.insert(hash, Cached { id, used: rows.clock, size });
             // The tile's previous placement goes after the new one is there: no
             // flicker. Lowercase: the image stays in the terminal for reuse.
             rows.unplace(&mut out, t, rows.shown[t]);
@@ -553,6 +701,16 @@ impl Renderer {
             sent += 1;
         }
         drop(pixels);
+        if !parts.is_empty() {
+            let encoded = self.encode_all(&parts);
+            let mut all = Vec::with_capacity(encoded.iter().map(Vec::len).sum::<usize>() + out.len() + 4096);
+            for ((before, _, _), image) in parts.iter().zip(&encoded) {
+                all.extend_from_slice(before);
+                all.extend_from_slice(image);
+            }
+            all.extend_from_slice(&out);
+            out = all;
+        }
         // Over the budget: free the least recently used images not on screen.
         if rows.bytes > CACHE_BYTES && rows.prediction.is_none() {
             let on_screen: std::collections::HashSet<u64> = rows.shown.iter().flatten().copied().collect();
@@ -610,6 +768,24 @@ impl Renderer {
         }
         drop(pixels);
         write_out(&out);
+    }
+
+    /// The escape codes of many images, compressed on up to 4 threads.
+    fn encode_all(&self, parts: &[(Vec<u8>, String, Vec<u8>)]) -> Vec<Vec<u8>> {
+        let encode = |(_, keys, rgb): &(Vec<u8>, String, Vec<u8>)| {
+            let mut out = Vec::new();
+            self.transmit(&mut out, keys, rgb);
+            out
+        };
+        let bytes: usize = parts.iter().map(|p| p.2.len()).sum();
+        if parts.len() < 4 || bytes < 256 << 10 {
+            return parts.iter().map(encode).collect();
+        }
+        let per = parts.len().div_ceil(4);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = parts.chunks(per).map(|chunk| scope.spawn(move || chunk.iter().map(encode).collect::<Vec<_>>())).collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        })
     }
 
     /// One Kitty image: through shared memory, or zlib and base64 in chunks.

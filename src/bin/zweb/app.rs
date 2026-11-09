@@ -601,7 +601,8 @@ impl App {
     fn predict(&mut self, dy: f32) {
         let l = self.layout();
         let k = (dy / self.row_css).round() as i32;
-        let small = k != 0 && k.unsigned_abs() <= (l.rows / 3) as u32;
+        // Any step: the renderer shows it only when it knows the rows it brings.
+        let small = k != 0 && k.unsigned_abs() < l.rows as u32;
         let browsing = self.mode != Mode::Hint && !self.help && self.prompt.is_none() && !self.tab().popup;
         // Only where the page itself scrolls the whole step.
         let Some((sy, ih, sh)) = self.extents else { return };
