@@ -60,6 +60,9 @@ struct Pending {
     predict: i32,
     /// Forget what was learned of the page (new page, other tab).
     forget: bool,
+    /// Link hint labels to show (cell column, cell row in the page, text);
+    /// an empty list removes them.
+    hints: Option<Vec<(u16, u16, String)>>,
     clear_popup: bool,
     clear_all: bool,
     stop: bool,
@@ -76,6 +79,55 @@ pub struct Renderer {
 }
 
 const POPUP_ID: u32 = 1;
+/// Link hint label images: this id and up.
+const HINT_IDS: u32 = 1 << 30;
+
+/// 5x7 glyphs of the hint letters, a row a byte (bit 4 is the left pixel).
+fn glyph(c: char) -> [u8; 7] {
+    match c.to_ascii_uppercase() {
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
+        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        _ => [0; 7],
+    }
+}
+
+/// A hint label: black letters on yellow, a box of 8x16 pixels a letter
+/// (one terminal cell), drawn 2x for sharp edges when scaled.
+fn label_image(text: &str) -> (usize, usize, Vec<u8>) {
+    const S: usize = 2;
+    let n = text.chars().count().max(1);
+    let (w, h) = (8 * n * S, 16 * S);
+    let mut rgb = vec![0u8; w * h * 3];
+    let mut set = |x: usize, y: usize, c: [u8; 3]| rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&c);
+    for y in 0..h {
+        for x in 0..w {
+            let edge = x < S || y < S || x >= w - S || y >= h - S;
+            set(x, y, if edge { [0xc3, 0x8a, 0x22] } else { [0xff, 0xd4, 0x00] });
+        }
+    }
+    for (i, c) in text.chars().enumerate() {
+        for (gy, bits) in glyph(c).iter().enumerate() {
+            for gx in 0..5 {
+                if bits & (0b10000 >> gx) != 0 {
+                    // Each glyph pixel: 1 wide, 2 tall in the 8x16 box, from (2, 2).
+                    for dy in 0..2 * S {
+                        for dx in 0..S {
+                            set((i * 8 + 2 + gx) * S + dx, (2 + gy * 2) * S + dy, [0, 0, 0]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (w, h, rgb)
+}
 /// A 1x1 image of the page's background, stretched over rows not known yet.
 const BG_ID: u32 = 2;
 /// Not the hash of any row: a row shown as background.
@@ -363,6 +415,12 @@ impl Renderer {
         self.wake.notify_one();
     }
 
+    /// Shows link hint labels over the page, replacing those shown.
+    pub fn hints(&self, labels: Vec<(u16, u16, String)>) {
+        self.pending.lock().unwrap().hints = Some(labels);
+        self.wake.notify_one();
+    }
+
     pub fn clear_popup(&self) {
         self.pending.lock().unwrap().clear_popup = true;
         self.wake.notify_one();
@@ -387,6 +445,7 @@ impl Renderer {
 
     pub fn run(&self) {
         let mut rows = Rows::new();
+        let mut hint_ids: Vec<u32> = Vec::new();
         loop {
             let mut p = self.pending.lock().unwrap();
             loop {
@@ -397,6 +456,7 @@ impl Renderer {
                     || p.clear_popup
                     || p.clear_all
                     || p.forget
+                    || p.hints.is_some()
                     || p.stop;
                 if busy {
                     break;
@@ -422,6 +482,7 @@ impl Renderer {
             let text = std::mem::take(&mut p.text);
             let predict = std::mem::take(&mut p.predict);
             let forget = std::mem::take(&mut p.forget);
+            let hints = p.hints.take();
             let (popup, clear_popup, clear_all, stop) =
                 (p.popup.take(), std::mem::take(&mut p.clear_popup), std::mem::take(&mut p.clear_all), p.stop);
             drop(p);
@@ -445,6 +506,10 @@ impl Renderer {
                     out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={POPUP_ID},q=2\x1b\\").as_bytes());
                 }
             }
+            let hints_drawn = hints.as_ref().is_some_and(|l| !l.is_empty());
+            if let Some(labels) = hints {
+                self.draw_hints(&mut out, &layout, &mut rows, &mut hint_ids, labels);
+            }
             out.extend_from_slice(&text);
             if predict != 0 && self.gfx != Gfx::Blocks {
                 self.show_prediction(&mut out, &layout, &mut rows, predict);
@@ -453,6 +518,9 @@ impl Renderer {
                 write_out(&out);
                 if predict != 0 {
                     crate::trace!("predict written {predict}");
+                }
+                if hints_drawn {
+                    crate::trace!("hints written");
                 }
             }
             if stop {
@@ -483,6 +551,31 @@ impl Renderer {
             if let (Some(frame), Some(_)) = (popup, layout.popup) {
                 self.draw_popup(&frame, &layout);
             }
+        }
+    }
+
+    /// Labels as small images over the page (text cells in Blocks mode).
+    fn draw_hints(&self, out: &mut Vec<u8>, layout: &Layout, rows: &mut Rows, ids: &mut Vec<u32>, labels: Vec<(u16, u16, String)>) {
+        if self.gfx == Gfx::Blocks {
+            // Cells written over: drawn again with the page's next frame.
+            if labels.is_empty() {
+                rows.shown.fill(None);
+            }
+            for (col, row, text) in &labels {
+                out.extend_from_slice(format!("\x1b[{};{}H\x1b[1;30;43m{}\x1b[0m", layout.top + row + 1, col + 1, text.to_uppercase()).as_bytes());
+            }
+            return;
+        }
+        for id in ids.drain(..) {
+            out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\").as_bytes());
+        }
+        for (i, (col, row, text)) in labels.iter().enumerate() {
+            let id = HINT_IDS + i as u32;
+            ids.push(id);
+            let (w, h, rgb) = label_image(text);
+            let n = text.chars().count().min(layout.cols.saturating_sub(*col) as usize).max(1);
+            out.extend_from_slice(format!("\x1b[{};{}H", layout.top + row + 1, col + 1).as_bytes());
+            self.transmit(out, &format!("a=T,f=24,s={w},v={h},i={id},c={n},r=1,C=1,q=2,z=10"), &rgb);
         }
     }
 

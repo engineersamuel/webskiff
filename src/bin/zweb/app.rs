@@ -103,6 +103,9 @@ struct Hint {
     key: String,
     x: f32,
     y: f32,
+    /// Top-left corner, where the label goes.
+    l: f32,
+    t: f32,
     href: Option<String>,
     edit: bool,
 }
@@ -424,13 +427,20 @@ impl App {
                 if self.index_of(tab) != Some(self.active) || self.mode != Mode::Hint {
                     return;
                 }
-                let list: Vec<serde_json::Value> = json.ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+                // A JSON string of the JSON list (hints.js).
+                let list: Vec<serde_json::Value> = json
+                    .ok()
+                    .and_then(|j| serde_json::from_str::<String>(&j).ok())
+                    .and_then(|j| serde_json::from_str(&j).ok())
+                    .unwrap_or_default();
                 self.hints = list
                     .iter()
                     .map(|h| Hint {
                         key: h["k"].as_str().unwrap_or("").into(),
                         x: h["x"].as_f64().unwrap_or(0.0) as f32,
                         y: h["y"].as_f64().unwrap_or(0.0) as f32,
+                        l: h["l"].as_f64().unwrap_or(0.0) as f32,
+                        t: h["t"].as_f64().unwrap_or(0.0) as f32,
                         href: h["href"].as_str().map(Into::into),
                         edit: h["edit"].as_bool().unwrap_or(false),
                     })
@@ -439,6 +449,7 @@ impl App {
                     self.mode = Mode::Browse;
                     self.message = "no links here".into();
                 }
+                self.show_hints("");
                 self.draw();
             }
             Msg::Found { found } => {
@@ -590,6 +601,11 @@ impl App {
     /// A wheel event; a small vertical step of the page is shown at once
     /// from the rows the terminal holds (render.rs, `predict`).
     fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32, mods: Modifiers) {
+        if self.mode == Mode::Hint {
+            self.mode = Mode::Browse;
+            self.clear_hints();
+            self.draw();
+        }
         if dx == 0.0 {
             self.predict(dy);
         }
@@ -650,11 +666,33 @@ impl App {
     }
 
     fn clear_hints(&mut self) {
+        let had = !self.hints.is_empty();
         self.hints.clear();
         self.hint_typed.clear();
-        if let Some(t) = self.tabs.get(self.active) {
-            t.view.evaluate("document.getElementById('__zweb_hints')?.remove()", |_| {});
+        if had {
+            self.renderer.hints(Vec::new());
+            if let Some(t) = self.tabs.get(self.active) {
+                // Blocks mode wrote the labels into page cells.
+                t.view.request_frame();
+            }
         }
+    }
+
+    /// Labels of the hints that start with `typed`, at their elements' cells.
+    fn show_hints(&self, typed: &str) {
+        let l = self.layout();
+        let (cw, ch) = (l.css_w as f32 / l.cols as f32, l.css_h as f32 / l.rows as f32);
+        let labels = self
+            .hints
+            .iter()
+            .filter(|h| h.key.starts_with(typed))
+            .map(|h| {
+                let col = ((h.l / cw) as u16).min(l.cols.saturating_sub(h.key.len() as u16));
+                let row = ((h.t / ch) as u16).min(l.rows.saturating_sub(1));
+                (col, row, h.key[typed.len()..].to_string())
+            })
+            .collect();
+        self.renderer.hints(labels);
     }
 
     fn hint_key(&mut self, k: KeyEvent) {
@@ -693,11 +731,7 @@ impl App {
                 self.mode = Mode::Insert;
             }
         } else {
-            let script = format!(
-                "document.querySelectorAll('#__zweb_hints span').forEach(s=>s.style.display=s.dataset.k.startsWith({})?'':'none')",
-                serde_json::to_string(&typed).unwrap()
-            );
-            self.view().evaluate(&script, |_| {});
+            self.show_hints(&self.hint_typed);
         }
         self.draw();
     }
