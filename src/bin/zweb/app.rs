@@ -112,7 +112,20 @@ struct Hint {
 
 pub struct Options {
     pub scale: Option<u32>,
+    /// Images as flat placeholders of the same size (key I toggles).
+    pub placeholders: bool,
 }
+
+/// Images keep their boxes (the layout does not move) and still load (so
+/// showing them is at once), but are painted one flat colour: flat tiles
+/// are tiny to send and repeat, so the terminal reuses them.
+const PLACEHOLDER_JS: &str = "(on=>{let s=document.getElementById('__zweb_img');\
+    if(!on){s&&s.remove();return}if(s)return;s=document.createElement('style');s.id='__zweb_img';\
+    s.textContent='img,video,canvas,picture,svg image{object-fit:none!important;object-position:-99999px -99999px!important;\
+    background:#d9dce1!important;background-image:none!important}video,canvas{visibility:hidden!important}';\
+    const add=()=>(document.head||document.documentElement).appendChild(s);\
+    if(document.documentElement)add();else new MutationObserver((m,o)=>{if(document.documentElement){o.disconnect();add()}})\
+    .observe(document,{childList:true})})";
 
 pub struct App {
     tabs: Vec<Tab>,
@@ -235,6 +248,9 @@ impl App {
         view.set_frame_rate(std::env::var("ZWEB_FPS").ok().and_then(|v| v.parse().ok()).unwrap_or(240.0));
         view.set_max_frames_in_flight(2);
         view.set_dialog_policy(DialogPolicy::Hold);
+        if self.opts.placeholders {
+            view.add_script(&format!("{PLACEHOLDER_JS}(true)"));
+        }
         let (renderer, active) = (self.renderer.clone(), self.active_id.clone());
         let debug = std::env::var_os("ZWEB_DEBUG").is_some();
         view.on_frame(move |frame| {
@@ -583,6 +599,16 @@ impl App {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&url);
                 self.renderer.write(format!("\x1b]52;c;{b64}\x07").as_bytes());
                 self.message = format!("copied {url}");
+            }
+            KeyCode::Char('I') => {
+                self.opts.placeholders = !self.opts.placeholders;
+                // Preloads cannot be removed: each toggle adds one, the last wins.
+                let js = format!("{PLACEHOLDER_JS}({})", self.opts.placeholders);
+                for t in &self.tabs {
+                    t.view.add_script(&js);
+                    t.view.evaluate(&js, |_| {});
+                }
+                self.message = if self.opts.placeholders { "images: placeholders" } else { "images: shown" }.into();
             }
             KeyCode::Char('?') => return self.show_help(),
             // Escape and the rest of the keys the page may use.
@@ -987,6 +1013,7 @@ zweb: a web browser in the terminal (zebkit / Chromium 157)          any key clo
   /  n N   find, next, previous
   + - 0    zoom in, out, reset
   y        copy URL (OSC 52)
+  I        images: show, or flat placeholders (faster)
   q  Ctrl-Q  quit (Ctrl-Q works in every mode)";
 
 /// Text typed in the prompt as a URL: as is with a scheme, https for a host, else a search.

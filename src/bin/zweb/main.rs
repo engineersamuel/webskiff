@@ -98,16 +98,17 @@ fn main() {
         std::process::exit(selftest::run());
     }
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("zweb [url] [--gfx kitty|shm|blocks] [--scale 1|2]\nzweb --selftest\nIn the browser, ? shows the keys.");
+        println!("zweb [url] [--gfx kitty|shm|blocks] [--scale 1|2] [--placeholders]\nzweb --selftest\nIn the browser, ? shows the keys.");
         return;
     }
     let url = args
         .iter()
         .enumerate()
-        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !args[i - 1].starts_with("--")))
+        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !matches!(args[i - 1].as_str(), "--gfx" | "--scale")))
         .map(|(_, a)| app::to_url(a))
         .unwrap_or_else(|| app::home().into());
     let scale = flag("--scale").and_then(|s| s.parse().ok());
+    let placeholders = args.iter().any(|a| a == "--placeholders");
 
     let saved_stderr = redirect_stderr();
     terminal::enable_raw_mode().expect("raw mode");
@@ -167,7 +168,7 @@ fn main() {
     }
     let code = zebkit::run_with_args(engine_args, move || {
         APP.with(|a| {
-            let mut app = App::new(r, Options { scale });
+            let mut app = App::new(r, Options { scale, placeholders });
             app.relayout();
             app.open_tab(Some(&url), None);
             *a.borrow_mut() = Some(app);

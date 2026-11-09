@@ -9,7 +9,7 @@ Separate from textward.
 
 ## zweb: the browser
 
-    target/release/zweb [url-or-search] [--gfx kitty|shm|blocks] [--scale 1|2]
+    target/release/zweb [url-or-search] [--gfx kitty|shm|blocks] [--scale 1|2] [--placeholders]
     target/release/zweb --selftest
 
 - Press `?` in zweb for all keys. `Ctrl-Q` quits in every mode.
@@ -19,7 +19,8 @@ Separate from textward.
 - Engine log: `~/.cache/zweb/zweb.log`. Set `ZWEB_DEBUG=1` to log every frame and its damage.
 - Speed work switches: `ZWEB_TRACE=1` logs the time of each stage of an interaction;
   `ZWEB_NOPREDICT=1` turns off instant scrolling; `ZWEB_FPS=n` sets the capture rate (240);
-  `ZWEB_ARGS="..."` adds Chromium switches.
+  `ZWEB_ARGS="..."` adds Chromium switches; `ZWEB_NOPROGRESSIVE=1` sends photo tiles sharp at once.
+- `I` (or `--placeholders`) paints images as flat boxes of the same size: much less to send on photo pages.
 - Profile (cookies, history): `~/.cache/zweb/profile`. The cookie key is a file in it, not the Keychain.
 
 ## zebkit-probe: timing tool
