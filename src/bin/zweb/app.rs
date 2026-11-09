@@ -585,8 +585,8 @@ impl App {
             }
             KeyCode::Char('t') => self.prompt(PromptKind::OpenTab, "new tab: ", ""),
             KeyCode::Char('x') => return self.close_tab(),
-            KeyCode::Char('K') | KeyCode::Tab => self.switch((self.active + 1) % self.tabs.len()),
-            KeyCode::Char('J') | KeyCode::BackTab => self.switch((self.active + self.tabs.len() - 1) % self.tabs.len()),
+            KeyCode::Char(']') | KeyCode::Char('K') | KeyCode::Tab => self.switch((self.active + 1) % self.tabs.len()),
+            KeyCode::Char('[') | KeyCode::Char('J') | KeyCode::BackTab => self.switch((self.active + self.tabs.len() - 1) % self.tabs.len()),
             KeyCode::Char(c @ '1'..='9') => self.switch(c as usize - '1' as usize),
             KeyCode::Char('f') => self.start_hints(false),
             KeyCode::Char('F') => self.start_hints(true),
@@ -1016,7 +1016,7 @@ zweb: a web browser in the terminal (zebkit / Chromium 157)          any key clo
   o  O     open URL (O: edit current)            Enter go, Esc cancel, Ctrl-U clear, Ctrl-W word
   t        open URL in new tab                   text without a dot is a DuckDuckGo search
   x        close tab
-  K J  Tab   next, previous tab   1-9 tab N    MOUSE
+  ] [ K J    next, previous tab   1-9 tab N    MOUSE
   H L      back, forward                         click, drag, wheel go to the page
   r  s     reload, stop                          click a tab on the top line to switch
   /  n N   find, next, previous
