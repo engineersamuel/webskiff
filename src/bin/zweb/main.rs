@@ -7,6 +7,7 @@ mod app;
 mod keys;
 mod render;
 mod selftest;
+mod trace;
 
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -90,6 +91,7 @@ fn query_graphics() -> (bool, bool) {
 }
 
 fn main() {
+    trace::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     if args.iter().any(|a| a == "--selftest") {
@@ -147,9 +149,23 @@ fn main() {
     let r = renderer.clone();
     // Cookie key in a file of the profile, not the macOS Keychain: a rebuilt
     // binary would make the Keychain ask again, and loads wait for the answer.
-    let code = zebkit::run_with_args(["zweb", "--headless", profile.as_str(), "--zebkit-cookie-storage=file",
+    let mut engine_args: Vec<String> = ["zweb", "--headless", profile.as_str(), "--zebkit-cookie-storage=file",
         // One frame per scroll step, not ~300 ms of animation frames to send.
-        "--disable-smooth-scrolling"], move || {
+        "--disable-smooth-scrolling",
+        // Frames sooner after input: no wait for a GPU vsync, and the page
+        // drawn in memory, so its capture needs no read back from the GPU.
+        "--disable-gpu-vsync", "--disable-gpu-compositing",
+        // As macOS shows them when not scrolling: none. A moving thumb would
+        // also change rows that scrolling otherwise only moves.
+        "--hide-scrollbars"]
+        .iter()
+        .map(|a| a.to_string())
+        .collect();
+    // For experiments: more Chromium switches.
+    if let Ok(extra) = std::env::var("ZWEB_ARGS") {
+        engine_args.extend(extra.split_whitespace().map(String::from));
+    }
+    let code = zebkit::run_with_args(engine_args, move || {
         APP.with(|a| {
             let mut app = App::new(r, Options { scale });
             app.relayout();
@@ -159,7 +175,10 @@ fn main() {
         // Terminal input on its own thread, each event posted to the engine's.
         std::thread::spawn(|| loop {
             match event::read() {
-                Ok(ev) => zebkit::post(move || send(Msg::Term(ev))),
+                Ok(ev) => {
+                    trace!("input read {ev:?}");
+                    zebkit::post(move || send(Msg::Term(ev)))
+                }
                 Err(_) => return,
             }
         });

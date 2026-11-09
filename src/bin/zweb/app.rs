@@ -38,6 +38,7 @@ pub enum Msg {
     Hints { tab: u64, json: Result<String, String> },
     Found { found: bool },
     Focused { ok: bool },
+    Extents { tab: u64, json: Option<String> },
     Tick,
 }
 
@@ -129,6 +130,9 @@ pub struct App {
     /// CSS pixels per cell row. The page is a whole number of rows tall and
     /// scrolls by whole rows, so moved rows are the same pixels, reused.
     row_css: f32,
+    /// The active page's scrollY, innerHeight and scrollHeight, as last
+    /// read and moved by predicted scrolls since.
+    extents: Option<(f32, f32, f32)>,
     opts: Options,
     renderer: Arc<Renderer>,
     last_click: (Instant, f32, f32, u32),
@@ -155,6 +159,7 @@ impl App {
             zoom: 1.0,
             scale: 1,
             row_css: 16.0,
+            extents: None,
             opts,
             renderer,
             last_click: (Instant::now() - Duration::from_secs(10), 0.0, 0.0, 0),
@@ -224,7 +229,7 @@ impl App {
         };
         let id = self.next_id;
         self.next_id += 1;
-        view.set_frame_rate(60.0);
+        view.set_frame_rate(std::env::var("ZWEB_FPS").ok().and_then(|v| v.parse().ok()).unwrap_or(240.0));
         view.set_max_frames_in_flight(2);
         view.set_dialog_policy(DialogPolicy::Hold);
         let (renderer, active) = (self.renderer.clone(), self.active_id.clone());
@@ -235,6 +240,11 @@ impl App {
                     frame.damage().iter().map(|r| (r.x, r.y, r.width, r.height)).collect::<Vec<_>>());
             }
             if active.get() == id {
+                if crate::trace::on() {
+                    let now = crate::trace::ticks_us();
+                    crate::trace!("frame {} recv drawn {:.2} ms ago, ready {:.2} ms ago", frame.sequence(),
+                        (now - frame.drawn_us()) as f64 / 1000.0, (now - frame.ready_us()) as f64 / 1000.0);
+                }
                 renderer.submit(frame);
             }
         });
@@ -267,7 +277,10 @@ impl App {
         tab.view.set_focus(true);
         self.renderer.layout.lock().unwrap().popup = None;
         self.renderer.clear_popup();
+        self.renderer.forget();
         tab.view.request_frame();
+        self.extents = None;
+        self.query_extents();
         self.draw();
     }
 
@@ -299,6 +312,9 @@ impl App {
     // ---- Messages ----
 
     pub fn handle(&mut self, msg: Msg) {
+        if let Msg::Term(_) = msg {
+            crate::trace!("input handled");
+        }
         match msg {
             Msg::Term(Event::Key(k)) if k.kind != KeyEventKind::Release => self.key(k),
             Msg::Term(Event::Mouse(m)) => self.mouse_event(m),
@@ -320,11 +336,20 @@ impl App {
                                 return self.draw();
                             }
                             t.url = url;
-                            if i == self.active && self.mode == Mode::Hint {
-                                self.mode = Mode::Browse;
+                            if i == self.active {
+                                if self.mode == Mode::Hint {
+                                    self.mode = Mode::Browse;
+                                }
+                                self.renderer.forget();
+                                self.extents = None;
                             }
                         }
-                        LoadEvent::Finished => t.loading = false,
+                        LoadEvent::Finished => {
+                            t.loading = false;
+                            if i == self.active {
+                                self.query_extents();
+                            }
+                        }
                         LoadEvent::Failed => {
                             t.loading = false;
                             if i == self.active {
@@ -395,6 +420,7 @@ impl App {
                 }
             }
             Msg::Hints { tab, json } => {
+                crate::trace!("hints result");
                 if self.index_of(tab) != Some(self.active) || self.mode != Mode::Hint {
                     return;
                 }
@@ -418,6 +444,12 @@ impl App {
             Msg::Found { found } => {
                 self.message = if found { format!("/{}", self.find) } else { format!("not found: {}", self.find) };
                 self.draw();
+            }
+            Msg::Extents { tab, json } => {
+                if self.index_of(tab) == Some(self.active) {
+                    let v: Option<Vec<f32>> = json.and_then(|j| serde_json::from_str(&j).ok());
+                    self.extents = v.filter(|v| v.len() == 3).map(|v| (v[0], v[1], v[2]));
+                }
             }
             Msg::Focused { ok } => {
                 if ok {
@@ -552,7 +584,43 @@ impl App {
     fn wheel(&mut self, dx: f32, dy: f32) {
         let l = self.layout();
         let (x, y) = if self.mouse == (0.0, 0.0) { (l.css_w as f32 / 2.0, l.css_h as f32 / 2.0) } else { self.mouse };
-        self.view().send_wheel(x, y, dx, dy, false, WheelPhase::None, Modifiers::NONE);
+        self.scroll_at(x, y, dx, dy, Modifiers::NONE);
+    }
+
+    /// A wheel event; a small vertical step of the page is shown at once
+    /// from the rows the terminal holds (render.rs, `predict`).
+    fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32, mods: Modifiers) {
+        if dx == 0.0 {
+            self.predict(dy);
+        }
+        self.view().send_wheel(x, y, dx, dy, false, WheelPhase::None, mods);
+        crate::trace!("wheel sent {dy} at {}", crate::trace::ticks_us());
+        self.query_extents();
+    }
+
+    fn predict(&mut self, dy: f32) {
+        let l = self.layout();
+        let k = (dy / self.row_css).round() as i32;
+        let small = k != 0 && k.unsigned_abs() <= (l.rows / 3) as u32;
+        let browsing = self.mode != Mode::Hint && !self.help && self.prompt.is_none() && !self.tab().popup;
+        // Only where the page itself scrolls the whole step.
+        let Some((sy, ih, sh)) = self.extents else { return };
+        let room = if dy > 0.0 { sh - ih - sy } else { sy };
+        let off = std::env::var_os("ZWEB_NOPREDICT").is_some();
+        if small && browsing && !off && room >= dy.abs() && self.renderer.gfx != crate::render::Gfx::Blocks {
+            // Shown only while predictions for this page are right (render.rs).
+            self.renderer.predict(k);
+            self.extents = Some((sy + dy, ih, sh));
+        }
+    }
+
+    fn query_extents(&self) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let id = t.id;
+        t.view.evaluate(
+            "[scrollY, innerHeight, document.scrollingElement ? document.scrollingElement.scrollHeight : 0]",
+            move |r| send(Msg::Extents { tab: id, json: r.ok() }),
+        );
     }
 
     fn set_zoom(&mut self, zoom: f64) {
@@ -672,6 +740,8 @@ impl App {
         let v = self.view();
         let line = STEP_ROWS * self.row_css;
         match m.kind {
+            MouseEventKind::ScrollDown => return self.scroll_at(x, y, 0.0, line, mods),
+            MouseEventKind::ScrollUp => return self.scroll_at(x, y, 0.0, -line, mods),
             MouseEventKind::Down(b) => {
                 if self.mode == Mode::Hint {
                     self.mode = Mode::Browse;
@@ -690,8 +760,6 @@ impl App {
             MouseEventKind::Up(b) => v.send_mouse(ZMouse::Up, x, y, button(b), self.last_click.3, mods),
             MouseEventKind::Drag(_) => v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, mods | Modifiers::LEFT_BUTTON),
             MouseEventKind::Moved => v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, mods),
-            MouseEventKind::ScrollDown => v.send_wheel(x, y, 0.0, line, false, WheelPhase::None, mods),
-            MouseEventKind::ScrollUp => v.send_wheel(x, y, 0.0, -line, false, WheelPhase::None, mods),
             MouseEventKind::ScrollRight => v.send_wheel(x, y, line, 0.0, false, WheelPhase::None, mods),
             MouseEventKind::ScrollLeft => v.send_wheel(x, y, -line, 0.0, false, WheelPhase::None, mods),
         }

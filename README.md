@@ -17,6 +17,9 @@ Separate from textward.
   answers that it reads it, `kitty` (zlib + base64) if it shows Kitty images, else `blocks` (`▀` cells).
 - `--scale 2` draws sharper on a Retina screen, at 4x the bytes.
 - Engine log: `~/.cache/zweb/zweb.log`. Set `ZWEB_DEBUG=1` to log every frame and its damage.
+- Speed work switches: `ZWEB_TRACE=1` logs the time of each stage of an interaction;
+  `ZWEB_NOPREDICT=1` turns off instant scrolling; `ZWEB_FPS=n` sets the capture rate (240);
+  `ZWEB_ARGS="..."` adds Chromium switches.
 - Profile (cookies, history): `~/.cache/zweb/profile`. The cookie key is a file in it, not the Keychain.
 
 ## zebkit-probe: timing tool
