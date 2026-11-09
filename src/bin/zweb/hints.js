@@ -18,7 +18,8 @@ JSON.stringify((() => {
     if (found.some(f => f.e.contains(e) && f.e.tagName === 'A')) continue;
     found.push({ e, r, x, y });
   }
-  const abc = 'asdfghjkl';
+  // Home row first, as Vimium: up to 196 targets with two letters.
+  const abc = 'sadfjklewcmpgh';
   let len = 1;
   while (abc.length ** len < found.length) len++;
   const label = i => { let s = ''; for (let j = 0; j < len; j++) { s = abc[i % abc.length] + s; i = Math.floor(i / abc.length); } return s; };

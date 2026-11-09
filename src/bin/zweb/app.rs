@@ -192,6 +192,7 @@ impl App {
         let px = terminal::window_size().ok();
         let page_rows = rows.saturating_sub(2).max(1);
         let (mut cell_w, mut cell_h) = (8.0, 16.0);
+        let known = px.as_ref().is_some_and(|p| p.width > 0 && p.height > 0);
         if let Some(px) = px.filter(|p| p.width > 0 && p.height > 0) {
             cell_w = px.width as f64 / cols as f64;
             cell_h = px.height as f64 / rows as f64;
@@ -205,7 +206,8 @@ impl App {
         self.scale = self.opts.scale.unwrap_or(if self.renderer.gfx == crate::render::Gfx::KittyShm { dpr as u32 } else { 1 });
         {
             let mut l = self.renderer.layout.lock().unwrap();
-            *l = Layout { top: 1, cols, rows: page_rows, css_w, css_h, hidden: self.help, popup: l.popup };
+            let cell_px = if known { (cell_w.round() as u16, cell_h.round() as u16) } else { (0, 0) };
+            *l = Layout { top: 1, cols, rows: page_rows, css_w, css_h, hidden: self.help, popup: l.popup, cell_px };
         }
         for t in &self.tabs {
             t.view.set_size(css_w, css_h, self.scale as f32);
@@ -708,16 +710,23 @@ impl App {
     fn show_hints(&self, typed: &str) {
         let l = self.layout();
         let (cw, ch) = (l.css_w as f32 / l.cols as f32, l.css_h as f32 / l.rows as f32);
-        let labels = self
+        let mut labels: Vec<(u16, u16, String)> = self
             .hints
             .iter()
             .filter(|h| h.key.starts_with(typed))
             .map(|h| {
-                let col = ((h.l / cw) as u16).min(l.cols.saturating_sub(h.key.len() as u16));
                 let row = ((h.t / ch) as u16).min(l.rows.saturating_sub(1));
-                (col, row, h.key[typed.len()..].to_string())
+                ((h.l / cw) as u16, row, h.key[typed.len()..].to_string())
             })
             .collect();
+        // Labels never cover each other: one in the way moves right.
+        labels.sort_by_key(|(c, r, _)| (*r, *c));
+        let mut free_from = vec![0u16; l.rows as usize];
+        for (col, row, k) in labels.iter_mut() {
+            let w = k.chars().count() as u16;
+            *col = (*col).max(free_from[*row as usize]).min(l.cols.saturating_sub(w));
+            free_from[*row as usize] = *col + w + 1;
+        }
         self.renderer.hints(labels);
     }
 

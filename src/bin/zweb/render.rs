@@ -36,6 +36,8 @@ pub struct Layout {
     pub hidden: bool,
     /// The open popup's place in CSS pixels.
     pub popup: Option<(i32, i32, i32, i32)>,
+    /// A terminal cell in device pixels (0 when the terminal does not say).
+    pub cell_px: (u16, u16),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -119,47 +121,56 @@ fn half(rgb: &[u8], w: usize, h: usize) -> (usize, usize, Vec<u8>) {
 /// Link hint label images: this id and up.
 const HINT_IDS: u32 = 1 << 30;
 
-/// 5x7 glyphs of the hint letters, a row a byte (bit 4 is the left pixel).
-fn glyph(c: char) -> [u8; 7] {
-    match c.to_ascii_uppercase() {
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
-        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
-        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
-        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
-        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
-        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        _ => [0; 7],
-    }
-}
-
-/// A hint label: black letters on yellow, a box of 8x16 pixels a letter
-/// (one terminal cell), drawn 2x for sharp edges when scaled.
-fn label_image(text: &str) -> (usize, usize, Vec<u8>) {
-    const S: usize = 2;
-    let n = text.chars().count().max(1);
-    let (w, h) = (8 * n * S, 16 * S);
-    let mut rgb = vec![0u8; w * h * 3];
-    let mut set = |x: usize, y: usize, c: [u8; 3]| rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&c);
-    for y in 0..h {
-        for x in 0..w {
-            let edge = x < S || y < S || x >= w - S || y >= h - S;
-            set(x, y, if edge { [0xc3, 0x8a, 0x22] } else { [0xff, 0xd4, 0x00] });
+/// A hint label: dark letters on yellow in the system's monospaced font,
+/// drawn at the terminal's own cell size, one letter a cell. Each letter is
+/// drawn once per cell size and kept.
+fn label_image(text: &str, cell: (u16, u16)) -> (usize, usize, Vec<u8>) {
+    use std::sync::{Mutex, OnceLock};
+    use zebkit::canvas::{Canvas, Font};
+    static FONT: OnceLock<Option<Mutex<Font>>> = OnceLock::new();
+    static LETTERS: OnceLock<Mutex<HashMap<(char, usize, usize), Vec<u8>>>> = OnceLock::new();
+    const YELLOW: [u8; 3] = [0xff, 0xd4, 0x00];
+    let (cw, ch) = if cell.0 > 0 && cell.1 > 0 { (cell.0 as usize, cell.1 as usize) } else { (16, 32) };
+    let letter = |l: char| -> Vec<u8> {
+        let mut cache = LETTERS.get_or_init(Mutex::default).lock().unwrap();
+        cache
+            .entry((l, cw, ch))
+            .or_insert_with(|| {
+                let font = FONT.get_or_init(|| {
+                    std::fs::read("/System/Library/Fonts/SFNSMono.ttf").ok().and_then(|b| Font::new(&b).ok()).map(Mutex::new)
+                });
+                let drawn = font.as_ref().and_then(|font| {
+                    let mut c = Canvas::new(cw as u32, ch as u32).ok()?;
+                    c.clear(0xffd400ff);
+                    let size = (ch as f64 * 0.78).min(cw as f64 * 1.55);
+                    c.set_font(&font.lock().unwrap(), size);
+                    c.set_fill_color(0x111111ff);
+                    let s = l.to_ascii_uppercase().to_string();
+                    let lw = c.measure_text(&s).unwrap_or(size * 0.6);
+                    let (x, y) = ((cw as f64 - lw) / 2.0, ch as f64 * 0.5 + size * 0.36);
+                    c.fill_text(&s, x, y).ok()?;
+                    // A touch bolder: once more, a third of a pixel over.
+                    c.fill_text(&s, x + 0.35, y).ok()?;
+                    Some(c.pixels().ok()?.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect())
+                });
+                drawn.unwrap_or_else(|| YELLOW.repeat(cw * ch))
+            })
+            .clone()
+    };
+    let letters: Vec<Vec<u8>> = text.chars().map(letter).collect();
+    let n = letters.len().max(1);
+    let (w, h) = (cw * n, ch);
+    let mut rgb = YELLOW.repeat(w * h);
+    for (i, img) in letters.iter().enumerate() {
+        for y in 0..ch {
+            rgb[(y * w + i * cw) * 3..(y * w + (i + 1) * cw) * 3].copy_from_slice(&img[y * cw * 3..(y + 1) * cw * 3]);
         }
     }
-    for (i, c) in text.chars().enumerate() {
-        for (gy, bits) in glyph(c).iter().enumerate() {
-            for gx in 0..5 {
-                if bits & (0b10000 >> gx) != 0 {
-                    // Each glyph pixel: 1 wide, 2 tall in the 8x16 box, from (2, 2).
-                    for dy in 0..2 * S {
-                        for dx in 0..S {
-                            set((i * 8 + 2 + gx) * S + dx, (2 + gy * 2) * S + dy, [0, 0, 0]);
-                        }
-                    }
-                }
+    // A thin darker edge, so labels stand apart from yellow on the page.
+    for y in 0..h {
+        for x in 0..w {
+            if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+                rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[0xb0, 0x7a, 0x10]);
             }
         }
     }
@@ -316,6 +327,8 @@ struct Rows {
     refine: HashMap<u64, (usize, usize, Vec<u8>)>,
     /// When the last page frame was drawn.
     drawn_at: Instant,
+    /// Hint letter images in the terminal, by letter and cell size.
+    letters: HashMap<(char, (u16, u16)), u32>,
 }
 
 impl Rows {
@@ -337,6 +350,7 @@ impl Rows {
             tape: Tape::default(),
             refine: HashMap::new(),
             drawn_at: Instant::now(),
+            letters: HashMap::new(),
         }
     }
 
@@ -350,6 +364,7 @@ impl Rows {
         self.bg_sent = None;
         self.tape.clear();
         self.refine.clear();
+        self.letters.clear();
     }
 
     /// The cell row, first column and width in columns of tile `t`.
@@ -659,17 +674,37 @@ impl Renderer {
             }
             return;
         }
+        // Lowercase d=i: the placements go, the letter images stay for next time.
         for id in ids.drain(..) {
-            out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\").as_bytes());
+            out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={id},q=2\x1b\\").as_bytes());
         }
+        // One image a letter, sent once; a label is placements of them.
+        let mut used = std::collections::BTreeSet::new();
         for (i, (col, row, text)) in labels.iter().enumerate() {
-            let id = HINT_IDS + i as u32;
-            ids.push(id);
-            let (w, h, rgb) = label_image(text);
-            let n = text.chars().count().min(layout.cols.saturating_sub(*col) as usize).max(1);
-            out.extend_from_slice(format!("\x1b[{};{}H", layout.top + row + 1, col + 1).as_bytes());
-            self.transmit(out, &format!("a=T,f=24,s={w},v={h},i={id},c={n},r=1,C=1,q=2,z=10"), &rgb);
+            for (j, l) in text.chars().enumerate() {
+                let c = *col as usize + j;
+                if c >= layout.cols as usize {
+                    break;
+                }
+                let key = (l, layout.cell_px);
+                let id = match rows.letters.get(&key) {
+                    Some(&id) => id,
+                    None => {
+                        let id = HINT_IDS + rows.letters.len() as u32;
+                        let (w, h, rgb) = label_image(&l.to_string(), layout.cell_px);
+                        self.transmit(out, &format!("a=t,f=24,s={w},v={h},i={id},q=2"), &rgb);
+                        rows.letters.insert(key, id);
+                        id
+                    }
+                };
+                used.insert(id);
+                let p = i * 4 + j + 1;
+                out.extend_from_slice(
+                    format!("\x1b[{};{}H\x1b_Ga=p,i={id},p={p},c=1,r=1,C=1,q=2,z=10\x1b\\", layout.top + row + 1, c + 1).as_bytes(),
+                );
+            }
         }
+        ids.extend(used);
     }
 
     fn miss(&self, rows: &mut Rows) {
