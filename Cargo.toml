@@ -14,6 +14,7 @@ crossterm = "0.29"
 flate2 = "1"
 libc = "0.2"
 unicode-width = "0.2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [build-dependencies]
 zebkit-build = "=0.4.0"

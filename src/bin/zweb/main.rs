@@ -147,7 +147,9 @@ fn main() {
     let r = renderer.clone();
     // Cookie key in a file of the profile, not the macOS Keychain: a rebuilt
     // binary would make the Keychain ask again, and loads wait for the answer.
-    let code = zebkit::run_with_args(["zweb", "--headless", profile.as_str(), "--zebkit-cookie-storage=file"], move || {
+    let code = zebkit::run_with_args(["zweb", "--headless", profile.as_str(), "--zebkit-cookie-storage=file",
+        // One frame per scroll step, not ~300 ms of animation frames to send.
+        "--disable-smooth-scrolling"], move || {
         APP.with(|a| {
             let mut app = App::new(r, Options { scale });
             app.relayout();

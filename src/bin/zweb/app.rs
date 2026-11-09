@@ -2,7 +2,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::io::Write;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,7 +22,8 @@ pub const HINTS_JS: &str = include_str!("hints.js");
 const EDITABLE_JS: &str = "(e=>!!e&&(e.isContentEditable||e.tagName==='TEXTAREA'||(e.tagName==='INPUT'&&\
     !/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(e.type))))(document.activeElement)";
 const HOME: &str = "https://duckduckgo.com/";
-const LINE: f32 = 80.0;
+/// Cell rows per scroll step (j, k, the wheel).
+const STEP_ROWS: f32 = 3.0;
 
 // ---- Messages: every callback queues one; `drain` handles them in order. ----
 
@@ -126,6 +126,9 @@ pub struct App {
     pending_g: bool,
     zoom: f64,
     scale: u32,
+    /// CSS pixels per cell row. The page is a whole number of rows tall and
+    /// scrolls by whole rows, so moved rows are the same pixels, reused.
+    row_css: f32,
     opts: Options,
     renderer: Arc<Renderer>,
     last_click: (Instant, f32, f32, u32),
@@ -151,6 +154,7 @@ impl App {
             pending_g: false,
             zoom: 1.0,
             scale: 1,
+            row_css: 16.0,
             opts,
             renderer,
             last_click: (Instant::now() - Duration::from_secs(10), 0.0, 0.0, 0),
@@ -174,7 +178,9 @@ impl App {
         // A retina terminal reports device pixels: count 2 per CSS pixel.
         let dpr = if cell_w >= 14.0 { 2.0 } else { 1.0 };
         let css_w = (cols as f64 * cell_w / (dpr * self.zoom)).round().max(64.0) as u32;
-        let css_h = (page_rows as f64 * cell_h / (dpr * self.zoom)).round().max(64.0) as u32;
+        let row_css = (cell_h / (dpr * self.zoom)).round().max(1.0);
+        self.row_css = row_css as f32;
+        let css_h = (page_rows as f64 * row_css) as u32;
         self.scale = self.opts.scale.unwrap_or(if self.renderer.gfx == crate::render::Gfx::KittyShm { dpr as u32 } else { 1 });
         {
             let mut l = self.renderer.layout.lock().unwrap();
@@ -218,8 +224,7 @@ impl App {
         };
         let id = self.next_id;
         self.next_id += 1;
-        // Raw frames through the pipe cost more: half the rate there.
-        view.set_frame_rate(if self.renderer.gfx == crate::render::Gfx::KittyShm { 60.0 } else { 30.0 });
+        view.set_frame_rate(60.0);
         view.set_max_frames_in_flight(2);
         view.set_dialog_policy(DialogPolicy::Hold);
         let (renderer, active) = (self.renderer.clone(), self.active_id.clone());
@@ -478,7 +483,9 @@ impl App {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let view = self.view();
         let l = self.layout();
-        let half = l.css_h as f32 / 2.0;
+        let line = STEP_ROWS * self.row_css;
+        let half = (l.rows / 2) as f32 * self.row_css;
+        let page = l.rows.saturating_sub(2).max(1) as f32 * self.row_css;
         let g = std::mem::take(&mut self.pending_g);
         self.message.clear();
         match k.code {
@@ -486,14 +493,14 @@ impl App {
             KeyCode::Char('d') if ctrl => self.wheel(0.0, half),
             KeyCode::Char('u') if ctrl => self.wheel(0.0, -half),
             KeyCode::Char('q') => return self.quit(),
-            KeyCode::Char('j') | KeyCode::Down => self.wheel(0.0, LINE),
-            KeyCode::Char('k') | KeyCode::Up => self.wheel(0.0, -LINE),
-            KeyCode::Char('h') | KeyCode::Left => self.wheel(-LINE, 0.0),
-            KeyCode::Char('l') | KeyCode::Right => self.wheel(LINE, 0.0),
+            KeyCode::Char('j') | KeyCode::Down => self.wheel(0.0, line),
+            KeyCode::Char('k') | KeyCode::Up => self.wheel(0.0, -line),
+            KeyCode::Char('h') | KeyCode::Left => self.wheel(-line, 0.0),
+            KeyCode::Char('l') | KeyCode::Right => self.wheel(line, 0.0),
             KeyCode::Char('d') => self.wheel(0.0, half),
             KeyCode::Char('u') => self.wheel(0.0, -half),
-            KeyCode::Char(' ') | KeyCode::PageDown => self.wheel(0.0, l.css_h as f32 * 0.9),
-            KeyCode::Char('b') | KeyCode::PageUp => self.wheel(0.0, -(l.css_h as f32) * 0.9),
+            KeyCode::Char(' ') | KeyCode::PageDown => self.wheel(0.0, page),
+            KeyCode::Char('b') | KeyCode::PageUp => self.wheel(0.0, -page),
             KeyCode::Char('g') if g => view.evaluate("scrollTo(0,0)", |_| {}),
             KeyCode::Char('g') => self.pending_g = true,
             KeyCode::Home => view.evaluate("scrollTo(0,0)", |_| {}),
@@ -531,9 +538,7 @@ impl App {
             KeyCode::Char('y') => {
                 let url = self.tab().url.clone();
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&url);
-                let mut out = std::io::stdout().lock();
-                let _ = write!(out, "\x1b]52;c;{b64}\x07");
-                let _ = out.flush();
+                self.renderer.write(format!("\x1b]52;c;{b64}\x07").as_bytes());
                 self.message = format!("copied {url}");
             }
             KeyCode::Char('?') => return self.show_help(),
@@ -665,6 +670,7 @@ impl App {
             TButton::Middle => MouseButton::Middle,
         };
         let v = self.view();
+        let line = STEP_ROWS * self.row_css;
         match m.kind {
             MouseEventKind::Down(b) => {
                 if self.mode == Mode::Hint {
@@ -684,10 +690,10 @@ impl App {
             MouseEventKind::Up(b) => v.send_mouse(ZMouse::Up, x, y, button(b), self.last_click.3, mods),
             MouseEventKind::Drag(_) => v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, mods | Modifiers::LEFT_BUTTON),
             MouseEventKind::Moved => v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, mods),
-            MouseEventKind::ScrollDown => v.send_wheel(x, y, 0.0, LINE, false, WheelPhase::None, mods),
-            MouseEventKind::ScrollUp => v.send_wheel(x, y, 0.0, -LINE, false, WheelPhase::None, mods),
-            MouseEventKind::ScrollRight => v.send_wheel(x, y, LINE, 0.0, false, WheelPhase::None, mods),
-            MouseEventKind::ScrollLeft => v.send_wheel(x, y, -LINE, 0.0, false, WheelPhase::None, mods),
+            MouseEventKind::ScrollDown => v.send_wheel(x, y, 0.0, line, false, WheelPhase::None, mods),
+            MouseEventKind::ScrollUp => v.send_wheel(x, y, 0.0, -line, false, WheelPhase::None, mods),
+            MouseEventKind::ScrollRight => v.send_wheel(x, y, line, 0.0, false, WheelPhase::None, mods),
+            MouseEventKind::ScrollLeft => v.send_wheel(x, y, -line, 0.0, false, WheelPhase::None, mods),
         }
     }
 
@@ -783,7 +789,7 @@ impl App {
     pub fn draw(&self) {
         let (cols, rows) = terminal::size().unwrap_or((100, 30));
         let cols = cols as usize;
-        let mut out = std::io::stdout().lock();
+        let mut out = Vec::new();
         // Top: tabs.
         let _ = queue!(out, cursor::MoveTo(0, 0), SetBackgroundColor(Color::Rgb { r: 40, g: 40, b: 48 }));
         let mut used = 0;
@@ -810,7 +816,7 @@ impl App {
         };
         let _ = queue!(out, cursor::MoveTo(0, row), SetBackgroundColor(color), SetForegroundColor(Color::Black), Print(tag), ResetColor);
         let s = *self.renderer.stats.lock().unwrap();
-        let stats = format!(" {}x{} {:.0}ms {}KB/{}strips ", s.width, s.height, s.last_ms, s.last_bytes / 1024, s.strips);
+        let stats = format!(" {}x{} {:.0}ms {}KB {}new/{}moved ", s.width, s.height, s.last_ms, s.last_bytes / 1024, s.sent, s.moved);
         let room = cols.saturating_sub(tag.len() + stats.len() + 1);
         let body = match &self.prompt {
             Some(p) => format!(" {}{}█", p.label, p.text),
@@ -829,32 +835,30 @@ impl App {
             Print(&stats),
             ResetColor
         );
-        let _ = out.flush();
+        self.renderer.write(&out);
     }
 
     fn clear_page_area(&self) {
         let l = self.layout();
-        let mut out = std::io::stdout().lock();
+        let mut out = Vec::new();
         for r in 0..l.rows {
             let _ = queue!(out, cursor::MoveTo(0, l.top + r), terminal::Clear(terminal::ClearType::CurrentLine));
         }
-        let _ = out.flush();
+        self.renderer.write(&out);
     }
 
     fn show_help(&mut self) {
         self.help = true;
         self.renderer.layout.lock().unwrap().hidden = true;
+        // The images go first; the help text is queued after them.
         self.renderer.clear_all();
-        // Let the render thread remove the images before the text goes in.
-        std::thread::sleep(Duration::from_millis(30));
         self.clear_page_area();
         let l = self.layout();
-        let mut out = std::io::stdout().lock();
+        let mut out = Vec::new();
         for (i, line) in HELP.lines().enumerate().take(l.rows as usize) {
             let _ = queue!(out, cursor::MoveTo(2, l.top + i as u16), Print(line));
         }
-        let _ = out.flush();
-        drop(out);
+        self.renderer.write(&out);
         self.draw();
     }
 }
