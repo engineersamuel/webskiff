@@ -18,11 +18,16 @@ JSON.stringify((() => {
     if (found.some(f => f.e.contains(e) && f.e.tagName === 'A')) continue;
     found.push({ e, r, x, y });
   }
-  // Home row first, as Vimium: up to 196 targets with two letters.
+  // Vimium's codes: prefix-free, as short as the count allows, so some
+  // targets get one letter. Home row first.
   const abc = 'sadfjklewcmpgh';
-  let len = 1;
-  while (abc.length ** len < found.length) len++;
-  const label = i => { let s = ''; for (let j = 0; j < len; j++) { s = abc[i % abc.length] + s; i = Math.floor(i / abc.length); } return s; };
+  let codes = [''], offset = 0;
+  while (codes.length - offset < found.length || codes.length === 1) {
+    const c = codes[offset++];
+    for (const ch of abc) codes.push(ch + c);
+  }
+  codes = codes.slice(offset, offset + found.length).sort().map(c => [...c].reverse().join(''));
+  const label = i => codes[i];
   return found.map((f, i) => {
     const tag = f.e.tagName;
     const edit = f.e.isContentEditable || tag === 'TEXTAREA' ||

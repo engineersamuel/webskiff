@@ -40,6 +40,18 @@ pub struct Layout {
     pub cell_px: (u16, u16),
 }
 
+impl Layout {
+    /// A cell in device pixels, guessed when the terminal does not say.
+    pub fn cell(&self) -> (u32, u32) {
+        if self.cell_px.0 > 0 && self.cell_px.1 > 0 { (self.cell_px.0 as u32, self.cell_px.1 as u32) } else { (16, 32) }
+    }
+
+    /// Device pixels a CSS pixel of the page takes on screen.
+    pub fn px_per_css(&self) -> f32 {
+        self.cell().0 as f32 * self.cols as f32 / self.css_w.max(1) as f32
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct Stats {
     pub frames: u64,
@@ -64,7 +76,7 @@ struct Pending {
     forget: bool,
     /// Link hint labels to show (cell column, cell row in the page, text);
     /// an empty list removes them.
-    hints: Option<Vec<(u16, u16, String)>>,
+    hints: Option<Vec<(u32, u32, String)>>,
     clear_popup: bool,
     clear_all: bool,
     stop: bool,
@@ -121,60 +133,63 @@ fn half(rgb: &[u8], w: usize, h: usize) -> (usize, usize, Vec<u8>) {
 /// Link hint label images: this id and up.
 const HINT_IDS: u32 = 1 << 30;
 
-/// A hint label: dark letters on yellow in the system's monospaced font,
-/// drawn at the terminal's own cell size, one letter a cell. Each letter is
-/// drawn once per cell size and kept.
-fn label_image(text: &str, cell: (u16, u16)) -> (usize, usize, Vec<u8>) {
+/// A hint label as Vimium draws it: bold capitals on a yellow gradient,
+/// rounded, with a thin gold edge. RGBA, `font_px` device pixels tall type.
+fn label_image(text: &str, font_px: u32) -> (usize, usize, Vec<u8>) {
     use std::sync::{Mutex, OnceLock};
     use zebkit::canvas::{Canvas, Font};
     static FONT: OnceLock<Option<Mutex<Font>>> = OnceLock::new();
-    static LETTERS: OnceLock<Mutex<HashMap<(char, usize, usize), Vec<u8>>>> = OnceLock::new();
-    const YELLOW: [u8; 3] = [0xff, 0xd4, 0x00];
-    let (cw, ch) = if cell.0 > 0 && cell.1 > 0 { (cell.0 as usize, cell.1 as usize) } else { (16, 32) };
-    let letter = |l: char| -> Vec<u8> {
-        let mut cache = LETTERS.get_or_init(Mutex::default).lock().unwrap();
-        cache
-            .entry((l, cw, ch))
-            .or_insert_with(|| {
-                let font = FONT.get_or_init(|| {
-                    std::fs::read("/System/Library/Fonts/SFNSMono.ttf").ok().and_then(|b| Font::new(&b).ok()).map(Mutex::new)
-                });
-                let drawn = font.as_ref().and_then(|font| {
-                    let mut c = Canvas::new(cw as u32, ch as u32).ok()?;
-                    c.clear(0xffd400ff);
-                    let size = (ch as f64 * 0.78).min(cw as f64 * 1.55);
-                    c.set_font(&font.lock().unwrap(), size);
-                    c.set_fill_color(0x111111ff);
-                    let s = l.to_ascii_uppercase().to_string();
-                    let lw = c.measure_text(&s).unwrap_or(size * 0.6);
-                    let (x, y) = ((cw as f64 - lw) / 2.0, ch as f64 * 0.5 + size * 0.36);
-                    c.fill_text(&s, x, y).ok()?;
-                    // A touch bolder: once more, a third of a pixel over.
-                    c.fill_text(&s, x + 0.35, y).ok()?;
-                    Some(c.pixels().ok()?.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect())
-                });
-                drawn.unwrap_or_else(|| YELLOW.repeat(cw * ch))
-            })
-            .clone()
-    };
-    let letters: Vec<Vec<u8>> = text.chars().map(letter).collect();
-    let n = letters.len().max(1);
-    let (w, h) = (cw * n, ch);
-    let mut rgb = YELLOW.repeat(w * h);
-    for (i, img) in letters.iter().enumerate() {
-        for y in 0..ch {
-            rgb[(y * w + i * cw) * 3..(y * w + (i + 1) * cw) * 3].copy_from_slice(&img[y * cw * 3..(y + 1) * cw * 3]);
+    let font = FONT.get_or_init(|| {
+        ["/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/SFNS.ttf"]
+            .iter()
+            .find_map(|p| std::fs::read(p).ok().and_then(|b| Font::new(&b).ok()))
+            .map(Mutex::new)
+    });
+    let text = text.to_uppercase();
+    let size = font_px as f64;
+    let pad = (size * 0.18).round().max(1.0);
+    let h = (size * 1.18).ceil() as usize;
+    let drawn = font.as_ref().and_then(|font| {
+        let font = font.lock().unwrap();
+        let mut probe = Canvas::new(1, 1).ok()?;
+        probe.set_font(&font, size);
+        let tw = probe.measure_text(&text)?;
+        let w = (tw + 2.0 * pad).ceil() as usize;
+        let mut c = Canvas::new(w as u32, h as u32).ok()?;
+        let (wf, hf) = (w as f64, h as f64);
+        let r = (size * 0.25).max(1.5);
+        let rounded = |c: &mut Canvas, i: f64| {
+            c.begin_path();
+            c.move_to(r + i, i);
+            c.line_to(wf - r - i, i);
+            c.arc(wf - r - i, r + i, r, -90.0, 0.0, false);
+            c.line_to(wf - i, hf - r - i);
+            c.arc(wf - r - i, hf - r - i, r, 0.0, 90.0, false);
+            c.line_to(r + i, hf - i);
+            c.arc(r + i, hf - r - i, r, 90.0, 180.0, false);
+            c.line_to(i, r + i);
+            c.arc(r + i, r + i, r, 180.0, 270.0, false);
+            c.close_path();
+        };
+        c.set_linear_gradient((0.0, 0.0), (0.0, hf), &[0.0, 1.0], &[0xfff785ff, 0xffc542ff]);
+        rounded(&mut c, 0.0);
+        c.fill(false);
+        c.set_stroke_color(0xe3be23ff);
+        c.set_line_width((size / 11.0).max(1.0));
+        rounded(&mut c, 0.5);
+        c.stroke();
+        c.set_font(&font, size);
+        c.set_fill_color(0x302505ff);
+        c.fill_text(&text, pad, hf * 0.5 + size * 0.36).ok()?;
+        Some((w, c.pixels().ok()?))
+    });
+    match drawn {
+        Some((w, rgba)) => (w, h, rgba),
+        None => {
+            let w = (size * 0.7) as usize * text.len().max(1);
+            (w, h, [0xff, 0xd4, 0x00, 0xff].repeat(w * h))
         }
     }
-    // A thin darker edge, so labels stand apart from yellow on the page.
-    for y in 0..h {
-        for x in 0..w {
-            if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
-                rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[0xb0, 0x7a, 0x10]);
-            }
-        }
-    }
-    (w, h, rgb)
 }
 /// A 1x1 image of the page's background, stretched over rows not known yet.
 const BG_ID: u32 = 2;
@@ -327,8 +342,8 @@ struct Rows {
     refine: HashMap<u64, (usize, usize, Vec<u8>)>,
     /// When the last page frame was drawn.
     drawn_at: Instant,
-    /// Hint letter images in the terminal, by letter and cell size.
-    letters: HashMap<(char, (u16, u16)), u32>,
+    /// Hint label images in the terminal, by text and font size.
+    labels: HashMap<(String, u32), u32>,
 }
 
 impl Rows {
@@ -350,7 +365,7 @@ impl Rows {
             tape: Tape::default(),
             refine: HashMap::new(),
             drawn_at: Instant::now(),
-            letters: HashMap::new(),
+            labels: HashMap::new(),
         }
     }
 
@@ -364,7 +379,7 @@ impl Rows {
         self.bg_sent = None;
         self.tape.clear();
         self.refine.clear();
-        self.letters.clear();
+        self.labels.clear();
     }
 
     /// The cell row, first column and width in columns of tile `t`.
@@ -474,8 +489,9 @@ impl Renderer {
         self.wake.notify_one();
     }
 
-    /// Shows link hint labels over the page, replacing those shown.
-    pub fn hints(&self, labels: Vec<(u16, u16, String)>) {
+    /// Shows link hint labels over the page, replacing those shown. Each is
+    /// at (x, y) device pixels from the page's top-left corner.
+    pub fn hints(&self, labels: Vec<(u32, u32, String)>) {
         self.pending.lock().unwrap().hints = Some(labels);
         self.wake.notify_one();
     }
@@ -662,47 +678,56 @@ impl Renderer {
         }
     }
 
-    /// Labels as small images over the page (text cells in Blocks mode).
-    fn draw_hints(&self, out: &mut Vec<u8>, layout: &Layout, rows: &mut Rows, ids: &mut Vec<u32>, labels: Vec<(u16, u16, String)>) {
+    /// Labels as small images over the page, at their own pixel size and
+    /// exact pixel place, as a browser shows them (text cells in Blocks mode).
+    fn draw_hints(&self, out: &mut Vec<u8>, layout: &Layout, rows: &mut Rows, ids: &mut Vec<u32>, labels: Vec<(u32, u32, String)>) {
+        let (cw, ch) = layout.cell();
         if self.gfx == Gfx::Blocks {
             // Cells written over: drawn again with the page's next frame.
             if labels.is_empty() {
                 rows.shown.fill(None);
             }
-            for (col, row, text) in &labels {
+            for (x, y, text) in &labels {
+                let (col, row) = ((x / cw) as u16, ((y / ch) as u16).min(layout.rows.saturating_sub(1)));
                 out.extend_from_slice(format!("\x1b[{};{}H\x1b[1;30;43m{}\x1b[0m", layout.top + row + 1, col + 1, text.to_uppercase()).as_bytes());
             }
             return;
         }
-        // Lowercase d=i: the placements go, the letter images stay for next time.
+        // Lowercase d=i: the placements go, the label images stay for next time.
         for id in ids.drain(..) {
             out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={id},q=2\x1b\\").as_bytes());
         }
-        // One image a letter, sent once; a label is placements of them.
+        let font_px = (11.0 * layout.px_per_css()).round().max(9.0) as u32;
         let mut used = std::collections::BTreeSet::new();
-        for (i, (col, row, text)) in labels.iter().enumerate() {
-            for (j, l) in text.chars().enumerate() {
-                let c = *col as usize + j;
-                if c >= layout.cols as usize {
-                    break;
+        for (i, (x, y, text)) in labels.iter().enumerate() {
+            let key = (text.clone(), font_px);
+            let id = match rows.labels.get(&key) {
+                Some(&id) => id,
+                None => {
+                    let id = HINT_IDS + rows.labels.len() as u32;
+                    let (w, h, rgba) = label_image(text, font_px);
+                    self.transmit(out, &format!("a=t,f=32,s={w},v={h},i={id},q=2"), &rgba);
+                    rows.labels.insert(key, id);
+                    id
                 }
-                let key = (l, layout.cell_px);
-                let id = match rows.letters.get(&key) {
-                    Some(&id) => id,
-                    None => {
-                        let id = HINT_IDS + rows.letters.len() as u32;
-                        let (w, h, rgb) = label_image(&l.to_string(), layout.cell_px);
-                        self.transmit(out, &format!("a=t,f=24,s={w},v={h},i={id},q=2"), &rgb);
-                        rows.letters.insert(key, id);
-                        id
-                    }
-                };
-                used.insert(id);
-                let p = i * 4 + j + 1;
-                out.extend_from_slice(
-                    format!("\x1b[{};{}H\x1b_Ga=p,i={id},p={p},c=1,r=1,C=1,q=2,z=10\x1b\\", layout.top + row + 1, c + 1).as_bytes(),
-                );
+            };
+            used.insert(id);
+            let (col, row) = (x / cw, (y / ch).min(layout.rows.saturating_sub(1) as u32));
+            if col >= layout.cols as u32 {
+                continue;
             }
+            // Not scaled to cells: its own pixels, offset inside the cell.
+            out.extend_from_slice(
+                format!(
+                    "\x1b[{};{}H\x1b_Ga=p,i={id},p={},X={},Y={},C=1,q=2,z=10\x1b\\",
+                    layout.top as u32 + row + 1,
+                    col + 1,
+                    i + 1,
+                    x % cw,
+                    (*y).min((row + 1) * ch - 1) % ch
+                )
+                .as_bytes(),
+            );
         }
         ids.extend(used);
     }

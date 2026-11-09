@@ -709,24 +709,13 @@ impl App {
     /// Labels of the hints that start with `typed`, at their elements' cells.
     fn show_hints(&self, typed: &str) {
         let l = self.layout();
-        let (cw, ch) = (l.css_w as f32 / l.cols as f32, l.css_h as f32 / l.rows as f32);
-        let mut labels: Vec<(u16, u16, String)> = self
+        let k = l.px_per_css();
+        let labels = self
             .hints
             .iter()
             .filter(|h| h.key.starts_with(typed))
-            .map(|h| {
-                let row = ((h.t / ch) as u16).min(l.rows.saturating_sub(1));
-                ((h.l / cw) as u16, row, h.key[typed.len()..].to_string())
-            })
+            .map(|h| ((h.l * k) as u32, (h.t * k) as u32, h.key[typed.len()..].to_string()))
             .collect();
-        // Labels never cover each other: one in the way moves right.
-        labels.sort_by_key(|(c, r, _)| (*r, *c));
-        let mut free_from = vec![0u16; l.rows as usize];
-        for (col, row, k) in labels.iter_mut() {
-            let w = k.chars().count() as u16;
-            *col = (*col).max(free_from[*row as usize]).min(l.cols.saturating_sub(w));
-            free_from[*row as usize] = *col + w + 1;
-        }
         self.renderer.hints(labels);
     }
 
