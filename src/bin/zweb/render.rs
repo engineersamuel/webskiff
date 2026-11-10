@@ -83,8 +83,12 @@ const REFINE_AFTER: Duration = Duration::from_millis(120);
 struct Part {
     /// Escape codes to write before it (cursor move, earlier deletes).
     before: Vec<u8>,
+    /// Size of `rgb`: the tile and its border.
     w: usize,
     h: usize,
+    /// The tile in `rgb` (x, y, w, h), and as placement keys.
+    inner: (usize, usize, usize, usize),
+    src: String,
     id: u32,
     place: String,
     rgb: Vec<u8>,
@@ -131,6 +135,9 @@ struct Cached {
     id: u32,
     used: u64,
     size: usize,
+    /// The part of the image shown (`x=,y=,w=,h=,`): the tile without the
+    /// 1-pixel border of its neighbours sent with it.
+    src: String,
 }
 
 /// A scroll shown before the page's frame for it came.
@@ -262,7 +269,7 @@ struct Rows {
     hits: u32,
     tape: Tape,
     /// Photo tiles sent at half size: their full pixels, by hash.
-    refine: HashMap<u64, (usize, usize, Vec<u8>)>,
+    refine: HashMap<u64, (usize, usize, Vec<u8>, String)>,
     /// When the last page frame was drawn.
     drawn_at: Instant,
 }
@@ -323,9 +330,11 @@ impl Rows {
             c.used = self.clock;
             c.id
         };
+        let src = self.cache.get(&hash).map_or("", |c| c.src.as_str());
         let (r, col, cols) = self.cell(layout, t);
         out.extend_from_slice(
-            format!("\x1b[{};{}H\x1b_Ga=p,i={id},p={},c={cols},r=1,C=1,q=2\x1b\\", layout.top + r + 1, col + 1, t + 1).as_bytes(),
+            format!("\x1b[{};{}H\x1b_Ga=p,i={id},{src}p={},c={cols},r=1,C=1,q=2\x1b\\", layout.top + r + 1, col + 1, t + 1)
+                .as_bytes(),
         );
         self.unplace(out, t, old);
         self.shown[t] = Some(hash);
@@ -542,12 +551,12 @@ impl Renderer {
         let mut out = Vec::new();
         let mut n = 0;
         let mut keep = HashMap::new();
-        for (hash, (w, h, rgb)) in std::mem::take(&mut rows.refine) {
+        for (hash, (w, h, rgb, src)) in std::mem::take(&mut rows.refine) {
             let tiles: Vec<usize> = (0..rows.shown.len()).filter(|&t| rows.shown[t] == Some(hash)).collect();
             let Some(old) = rows.cache.get(&hash).map(|c| c.id) else { continue };
             if tiles.is_empty() {
                 // Not on screen: sharp if it comes back (cached as blurry).
-                keep.insert(hash, (w, h, rgb));
+                keep.insert(hash, (w, h, rgb, src));
                 continue;
             }
             let id = rows.next_id;
@@ -555,7 +564,7 @@ impl Renderer {
             for (i, &t) in tiles.iter().enumerate() {
                 let (r, col, cols) = rows.cell(layout, t);
                 out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
-                let place = format!("p={},c={cols},r=1,C=1,q=2", t + 1);
+                let place = format!("{src}p={},c={cols},r=1,C=1,q=2", t + 1);
                 if i == 0 {
                     self.transmit(&mut out, &format!("a=T,f=24,s={w},v={h},i={id},{place}"), &rgb);
                 } else {
@@ -568,6 +577,7 @@ impl Renderer {
             rows.bytes += rgb.len() - c.size;
             c.id = id;
             c.size = rgb.len();
+            c.src = src;
             n += 1;
         }
         // Bounded: about 6 KB each.
@@ -780,14 +790,20 @@ impl Renderer {
             let id = rows.next_id;
             rows.next_id += 1;
             rows.clock += 1;
-            let rgb = pixels.rgb(x0, y0, x1 - x0, y1 - y0);
+            // With a 1-pixel border of its neighbours: a terminal that scales
+            // smoothly blends edges with them, not with see-through pixels.
+            let (bx0, by0) = (x0.saturating_sub(1), y0.saturating_sub(1));
+            let (bx1, by1) = ((x1 + 1).min(w as usize), (y1 + 1).min(h as usize));
+            let rgb = pixels.rgb(bx0, by0, bx1 - bx0, by1 - by0);
+            let inner = (x0 - bx0, y0 - by0, x1 - x0, y1 - y0);
+            let src = format!("x={},y={},w={},h={},", inner.0, inner.1, inner.2, inner.3);
             out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
             let place = format!("p={},c={cols},r=1,C=1,q=2", t + 1);
             // Encoded below, on several threads.
             let size = rgb.len();
-            parts.push(Part { before: std::mem::take(&mut out), w: x1 - x0, h: y1 - y0, id, place, rgb, hash });
+            rows.cache.insert(hash, Cached { id, used: rows.clock, size, src: src.clone() });
+            parts.push(Part { before: std::mem::take(&mut out), w: bx1 - bx0, h: by1 - by0, inner, src, id, place, rgb, hash });
             rows.bytes += size;
-            rows.cache.insert(hash, Cached { id, used: rows.clock, size });
             // The tile's previous placement goes after the new one is there: no
             // flicker. Lowercase: the image stays in the terminal for reuse.
             rows.unplace(&mut out, t, rows.shown[t]);
@@ -802,7 +818,11 @@ impl Renderer {
                 all.extend_from_slice(&part.before);
                 all.extend_from_slice(&image);
                 if blurry {
-                    rows.refine.insert(part.hash, (part.w, part.h, part.rgb));
+                    // Shown whole until sent sharp (refine).
+                    if let Some(c) = rows.cache.get_mut(&part.hash) {
+                        c.src.clear();
+                    }
+                    rows.refine.insert(part.hash, (part.w, part.h, part.rgb, part.src));
                 }
             }
             all.extend_from_slice(&out);
@@ -875,19 +895,23 @@ impl Renderer {
     fn encode_all(&self, parts: &[Part]) -> Vec<(Vec<u8>, bool)> {
         let progressive = self.gfx == Gfx::KittyDirect && std::env::var_os("ZWEB_NOPROGRESSIVE").is_none();
         let encode = |p: &Part| {
-            let keys = |w: usize, h: usize| format!("a=T,f=24,s={w},v={h},i={},{}", p.id, p.place);
-            if progressive && p.h >= 2 {
+            let keys = |w: usize, h: usize, src: &str| format!("a=T,f=24,s={w},v={h},i={},{src}{}", p.id, p.place);
+            if progressive && p.inner.3 >= 2 {
                 let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
                 z.write_all(&p.rgb).unwrap();
                 if z.finish().unwrap().len() * 4 > p.rgb.len() {
-                    let (hw, hh, small) = half(&p.rgb, p.w, p.h);
+                    // Blurry: the tile alone, at half size.
+                    let (ix, iy, iw, ih) = p.inner;
+                    let tile: Vec<u8> =
+                        (iy..iy + ih).flat_map(|y| p.rgb[(y * p.w + ix) * 3..(y * p.w + ix + iw) * 3].iter().copied()).collect();
+                    let (hw, hh, small) = half(&tile, iw, ih);
                     let mut out = Vec::new();
-                    self.transmit(&mut out, &keys(hw, hh), &small);
+                    self.transmit(&mut out, &keys(hw, hh, ""), &small);
                     return (out, true);
                 }
             }
             let mut out = Vec::new();
-            self.transmit(&mut out, &keys(p.w, p.h), &p.rgb);
+            self.transmit(&mut out, &keys(p.w, p.h, &p.src), &p.rgb);
             (out, false)
         };
         let bytes: usize = parts.iter().map(|p| p.rgb.len()).sum();

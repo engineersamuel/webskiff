@@ -250,6 +250,9 @@ impl App {
         view.set_frame_rate(std::env::var("ZWEB_FPS").ok().and_then(|v| v.parse().ok()).unwrap_or(240.0));
         view.set_max_frames_in_flight(2);
         view.set_dialog_policy(DialogPolicy::Hold);
+        // Copy buttons (navigator.clipboard.writeText): allowed, as Chrome
+        // allows them after a click. Reading the clipboard stays denied.
+        let _ = view.set_permission("clipboard-write", zebkit::PermissionState::Granted, Some("*"));
         if self.opts.placeholders {
             view.add_script(&format!("{PLACEHOLDER_JS}(true)"));
         }
