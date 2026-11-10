@@ -236,7 +236,7 @@ and protected draft-only releases. The user selected MIT for Webskiff's own code
 `LICENSE` and Cargo SPDX metadata are in place, with explicit Zebkit credit in
 the README and third-party notices. Public packaging still requires reviewed
 third-party notices. These file checks are not legal
-clearance. The selected source remote is the private
+clearance. The selected source remote is the public
 `https://github.com/engineersamuel/webskiff.git`, with source pushed to `main`.
 Native macOS CI passed the build, keyboard, relocated-engine, and Homebrew smoke
 tests. Native Linux build, keyboard, and relocated-engine checks also pass.
@@ -271,10 +271,10 @@ The final before/after/repeat p50/p90 timing and byte tables are in
 Small samples do not prove a regression or prove its absence. Performance/output
 approval remains open. No sub-10-ms or smooth-YouTube release claim is justified.
 
-Still required before publication: publication/company approval, reviewed engine
-notices, a chosen tap repository, protected GitHub release
-environment and signing/notarization secrets, passing native hosted CI on the
-release tag,
+The owner approved public source and redistribution. Before binary publication,
+the required engine/dependency notices must be bundled, a tap selected, and
+signing/notarization configured. The protected release environment is in place.
+Also required: passing native hosted CI on the release tag,
 quarantined fresh-Mac installation, full Homebrew lifecycle tests, and actual
 terminal/video/accessibility/company-policy acceptance. Store signing secrets
 only in GitHub environment settings, not this repository or chat.
@@ -295,21 +295,27 @@ release-acceptance item, including one 84.05 ms previous-match p90.
 The user authorized committing/pushing to `engineersamuel/webskiff` and repository
 setup, then restored personal-account authentication. Source commit `81c6fd6`
 and follow-up fixes are pushed to `main`. Origin uses HTTPS with a repository-local
-GH credential helper; no token is stored in this repository. The repository remains private.
+GH credential helper; no token is stored in this repository. The user explicitly
+approved public source and redistribution. A local redacted Gitleaks scan of
+all 20 existing commits reported no leaks before the repository was made public.
 Merge commits are disabled and rebase merging is enabled. Actions require pinned
 SHAs, allow GitHub-owned actions plus `astral-sh/setup-uv`, and default to read-only
 workflow tokens without automated review approval.
 
 Public release jobs are explicitly disabled by `PUBLIC_RELEASE_ENABLED=false`.
-The current GitHub plan rejects private-repository rulesets and required release
-reviewers. A failed environment-protection request left an unprotected environment;
-it was removed immediately. No unprotected release environment remains.
-Do not upgrade billing or make the repository public without separate approval.
+Public visibility resolved the earlier plan restriction. The `release`
+environment requires approval from `engineersamuel`, permits only `v*` tags, and
+disables administrator bypass. No signing credentials were read or handled.
+The account owner's setup steps are in `docs/releasing.md#one-time-apple-setup`.
 The first hosted macOS run passed. Linux initially refused startup because
 Ubuntu blocked Chromium's sandbox namespaces. CI now allows user namespaces on
 the disposable hosted Linux runner; Chromium's sandbox was not disabled.
 Native Linux build, keyboard, and relocated-engine checks pass with that configuration.
 Keyboard failures now print the isolated engine log before deleting the test profile.
+A later Linux run exposed the fixed four-second startup assumption; an unchanged
+rerun passed. Functional keyboard checks now wait for the fixture title, with a
+bounded failure and engine-log output. Per-key assertion windows and benchmark
+warm-up behavior are unchanged.
 
 ## Open items / not verified
 

@@ -79,6 +79,20 @@ def percentile(values, fraction):
     return values[min(int(len(values) * fraction), len(values) - 1)] if values else None
 
 
+def wait_for_fixture():
+    output = bytearray()
+    deadline = time.monotonic() + 20
+    terminal = select.poll()
+    terminal.register(fd, select.POLLHUP)
+    while time.monotonic() < deadline:
+        output.extend(b"".join(data for _, data in pump(0.1)))
+        if b"keyboard fixture" in output:
+            return
+        if terminal.poll(0):
+            break
+    raise AssertionError(f"keyboard fixture did not load: {bytes(output[-3000:])!r}")
+
+
 try:
     pump(0.5)
     os.write(fd, b"\x1b_Gi=31;OK\x1b\\\x1b[?62;c")
@@ -86,7 +100,10 @@ try:
         negotiation = b"".join(data for _, data in pump(0.25))
         assert b"\x1b[?u" in negotiation, f"no enhanced-keyboard query: {negotiation!r}"
         os.write(fd, b"\x1b[?1u\x1b[?62;c")
-    pump(4)
+    if args.check or args.check_only or args.config_check or args.enhanced_check:
+        wait_for_fixture()
+    else:
+        pump(4)
     if args.enhanced_check:
         raw_flags = termios.ICANON | termios.ECHO | termios.ISIG
         assert termios.tcgetattr(fd)[3] & raw_flags == 0, "browser did not enter raw mode"

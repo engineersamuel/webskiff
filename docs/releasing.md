@@ -5,15 +5,16 @@ A successful build is not permission to claim production readiness.
 
 ## Current gates
 
-The source remote is `https://github.com/engineersamuel/webskiff.git` (private).
-Personal-account GitHub access is restored. Repository-local HTTPS Git
+The source remote is `https://github.com/engineersamuel/webskiff.git` (public).
+The project owner approved public source and redistribution. The tracked source
+and all 20 existing commits passed a local redacted Gitleaks scan before the
+visibility change. This scan is not a guarantee that every sensitive item is absent.
+Repository-local HTTPS Git
 authentication uses the GitHub CLI credential helper, not a stored token file.
 `PUBLIC_RELEASE_ENABLED=false` keeps public release jobs disabled.
-The current GitHub plan rejects private-repository rulesets and required release
-reviewers. A protected release environment could not be configured; the partial
-unprotected environment was removed. Upgrade eligibility or separately approve
-public repository visibility before configuring these protections. Do not enable
-release jobs without them.
+The protected `release` environment requires approval from `engineersamuel`,
+allows only `v*` tags, and does not allow administrator bypass. Public visibility
+removed the previous plan restriction on these protections.
 Webskiff's own code is licensed under MIT, with `LICENSE` and Cargo SPDX metadata
 in place. Zebkit is credited in the README and third-party notices. A complete
 reviewed engine license bundle and Apple signing credentials are still missing.
@@ -24,13 +25,14 @@ for source commit `1aff5b2`. No fresh-machine installation has been verified.
 
 Before public distribution:
 
-1. Confirm publication approval and any required company clearance. The selected
-   MIT project license does not approve redistribution of third-party components.
-1. Obtain and review Zebkit/Chromium and Rust dependency notices. Put the required
-   texts and notices under `packaging/third-party/`. Verify LGPL obligations with
-   the engine supplier. `dependencies.json` is an inventory, not legal clearance.
+1. Retain the owner's publication and redistribution approval. Keep separate any
+   company approval needed for using sensitive accounts or deploying internally.
+1. Bundle the required Zebkit/Chromium and Rust dependency license texts and
+   notices under `packaging/third-party/`. Preserve the source/relinking material
+   required by the approved redistribution terms. `dependencies.json` is an
+   inventory, not a substitute for these materials.
 1. Choose a `homebrew-tap` repository. Reviewed source has been pushed to the
-   private application repository; do not make it public without separate approval.
+   public application repository. No binary release or tap has been published.
 1. Review and include all intended source files. A clean checkout must build.
    Do not commit engine binaries, profiles, credentials, or build outputs.
 1. Run CI on macOS ARM64 and experimental Linux x86-64. Fix failures before
@@ -123,21 +125,62 @@ weekly but does not replace monitoring the engine's release/security channels.
 
 ## Signing and draft release workflow
 
-Configure a GitHub environment named **`release`** with required reviewers and
-tag-only deployment restrictions before enabling release jobs.
+The GitHub environment named **`release`** is configured with owner approval,
+`v*` tag-only deployment restrictions, and administrator bypass disabled.
+The owner may approve their own run; this is a single-maintainer project.
 Set the repository variable `PUBLIC_RELEASE_ENABLED=true` only after the legal
 and platform gates are met. The workflow never publishes a draft automatically.
 
-Provide these **environment secrets**, never repository files:
+### One-time Apple setup
+
+These steps must be done by the account owner. Do not send certificates, private
+keys, or passwords to the assistant or commit them to the repository.
+
+1. Use an active [Apple Developer Program](https://developer.apple.com/programs/)
+   membership. Apple requires the **Account Holder** role to create the locally
+   issued Developer ID certificate used by this workflow.
+1. On your Mac, open **Keychain Access > Certificate Assistant > Request a
+   Certificate from a Certificate Authority**. Enter your email and a key name,
+   leave CA Email Address blank, and choose **Saved to disk**. See
+   [Apple's CSR instructions](https://developer.apple.com/help/account/certificates/create-a-certificate-signing-request).
+1. In [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/certificates/list),
+   add a **Developer ID Application** certificate using that CSR. Do not choose
+   Apple Development, Developer ID Installer, or a cloud-managed certificate.
+   Download the `.cer` file and double-click it on the Mac that created the CSR.
+   See [Apple's Developer ID instructions](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/).
+1. In Keychain Access, select **My Certificates**. Find
+   `Developer ID Application: NAME (TEAMID)` and confirm it has a private key.
+   Export that certificate and its private key as
+   `webskiff-signing.p12`, with an export password. Keep the file and password secure.
+1. At [account.apple.com](https://account.apple.com), open **Sign-In and Security >
+   App-Specific Passwords** and generate a password named `Webskiff notarization`.
+   Two-factor authentication is required. Use this password, not your normal
+   Apple Account password. See [Apple's password instructions](https://support.apple.com/en-us/102654).
+1. Open [repository environment settings](https://github.com/engineersamuel/webskiff/settings/environments),
+   select **release**, and add the six **Environment secrets** below. Use the
+   Apple Developer account's Membership details for the Team ID.
 
 | Secret | Purpose |
 |---|---|
-| `MACOS_CERTIFICATE_P12` | Base64-encoded Developer ID Application certificate |
+| `MACOS_CERTIFICATE_P12` | Base64-encoded `.p12` containing the certificate and private key |
 | `MACOS_CERTIFICATE_PASSWORD` | Password for the certificate export |
-| `MACOS_SIGNING_IDENTITY` | Developer ID Application identity |
-| `APPLE_ID` | Notarization account |
+| `MACOS_SIGNING_IDENTITY` | Exact `Developer ID Application: NAME (TEAMID)` identity |
+| `APPLE_ID` | Apple Account email used for notarization |
 | `APPLE_TEAM_ID` | Apple developer team |
 | `APPLE_APP_PASSWORD` | App-specific notarization password |
+
+To copy the encoded `.p12` for its GitHub secret, run this yourself on your Mac
+(Fish syntax), using the actual export path:
+
+```fish
+base64 -i "$HOME/Downloads/webskiff-signing.p12" | pbcopy
+```
+
+Paste only into `MACOS_CERTIFICATE_P12` in GitHub, not into chat. When all six
+secrets are saved, report only **"Apple signing secrets are configured."**
+Do not enable `PUBLIC_RELEASE_ENABLED` yet.
+
+### Signing and release validation
 
 The macOS job imports credentials into a temporary keychain, signs the copied
 helper/framework/browser, submits a ZIP to Apple, requires an `Accepted` result,

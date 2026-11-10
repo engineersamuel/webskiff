@@ -17,12 +17,12 @@ is not a substitute for license texts, copyright notices, or source obligations.
 Webskiff's own code is licensed under [MIT](LICENSE). That license does not
 relicense Zebkit, Chromium, or other third-party code.
 
-## Distribution is not approved yet
+## Redistribution approval and notice bundle
 
-The downloaded engine archive does not include a complete license-notice bundle,
-even though MIT has been selected for Webskiff's own code. Do not redistribute
-public binary packages until rights to redistribute the dependencies are confirmed
-and reviewed license texts and notices are supplied under `packaging/third-party/`.
+The project owner has approved redistribution. The downloaded engine archive
+still does not include a complete license-notice bundle. Required license texts
+and notices must be supplied under `packaging/third-party/` before public binary
+packages can be prepared. Approval does not replace shipping the required notices.
 Confirm LGPL source availability and replacement/relinking requirements with the
 engine supplier; do not assume a source link alone satisfies all obligations.
 

@@ -15,8 +15,7 @@ run in Chromium, not a text-only approximation.
 **Preview in preparation.** The current version is `0.1.0-beta.1`.
 There is no published binary release or Homebrew tap yet. Do not use this build
 for sensitive accounts or treat it as an approved company browser.
-Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/webskiff)
-(currently private).
+Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/webskiff).
 
 [Get started](#get-started) · [Keyboard guide](#keyboard-guide) ·
 [Configuration](#configuration) · [Support](#support) ·
