@@ -20,6 +20,7 @@ Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/w
 
 [Get started](#get-started) · [Keyboard guide](#keyboard-guide) ·
 [Configuration](#configuration) · [Support](#support) ·
+[Build and test](https://github.com/engineersamuel/webskiff/actions/workflows/ci.yml) ·
 [Release process](docs/releasing.md)
 
 ## See the controls
@@ -112,8 +113,8 @@ an error. Restart after editing. Help always shows the configured bindings.
 
 | System | Status |
 |---|---|
-| macOS 13+, Apple Silicon | Locally built and tested; real-terminal acceptance remains open |
-| Linux x86-64, Ubuntu 24.04 runner | Experimental CI target; not yet verified on a runner |
+| macOS 13+, Apple Silicon | Native CI build, keyboard, relocated-engine, and Homebrew smoke tests pass; real-terminal acceptance remains open |
+| Linux x86-64, Ubuntu 24.04 runner | Native CI build, keyboard, and relocated-engine checks pass; experimental, with [sandbox setup requirements](docs/usage.md#linux-sandbox-startup) |
 | macOS Intel / Linux ARM64 | No pinned upstream engine package; not enabled |
 | Windows | Not supported by Webskiff's current Unix terminal implementation |
 

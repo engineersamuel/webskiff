@@ -45,6 +45,20 @@ terminal. Shared memory is local-only.
 `--scale 2` gives sharper Retina output but can require four times the pixels.
 `I` or `--placeholders` replaces images with flat boxes for lower transfer cost.
 
+## Linux sandbox startup
+
+The experimental Linux build needs the runtime libraries listed in
+[the CI workflow](../.github/workflows/ci.yml). Chromium also needs working
+unprivileged user namespaces or a correctly installed sandbox helper.
+Ubuntu 23.10 and later can restrict user namespaces through AppArmor.
+
+If startup fails, check `~/.cache/zweb/zweb.log` for the engine's diagnosis.
+Ask your system administrator for an approved AppArmor profile or sandbox-helper
+installation. Do not run Webskiff as root or use `--no-sandbox`.
+
+CI allows user namespaces on disposable hosted Linux runners. That setting is
+not a recommendation to change your normal machine's security policy.
+
 ## Data and diagnostics
 
 Legacy paths are intentionally unchanged:

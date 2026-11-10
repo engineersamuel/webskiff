@@ -15,8 +15,10 @@ unprotected environment was removed. Upgrade eligibility or separately approve
 public repository visibility before configuring these protections. Do not enable
 release jobs without them.
 This checkout has no selected project license, complete engine license bundle,
-or Apple signing credentials. No hosted runner or fresh-machine installation
-has been verified here.
+or Apple signing credentials. Native macOS and Linux CI have passed the build,
+keyboard, and relocated-engine tests; macOS also passed the isolated Homebrew test.
+See the [verified native run](https://github.com/engineersamuel/webskiff/actions/runs/42887920588)
+for source commit `1aff5b2`. No fresh-machine installation has been verified.
 
 Before public distribution:
 
@@ -25,9 +27,8 @@ Before public distribution:
 1. Obtain and review Zebkit/Chromium and Rust dependency notices. Put the required
    texts and notices under `packaging/third-party/`. Verify LGPL obligations with
    the engine supplier. `dependencies.json` is an inventory, not legal clearance.
-1. Push the reviewed source to the application repository and choose a
-   `homebrew-tap` repository. The application repository already exists;
-   do not make it public without separate approval.
+1. Choose a `homebrew-tap` repository. Reviewed source has been pushed to the
+   private application repository; do not make it public without separate approval.
 1. Review and include all intended source files. A clean checkout must build.
    Do not commit engine binaries, profiles, credentials, or build outputs.
 1. Run CI on macOS ARM64 and experimental Linux x86-64. Fix failures before
@@ -100,7 +101,10 @@ identity.
 
 `packaging/engines.json` records upstream archive hashes and target status.
 The workflow uses native `macos-15` ARM64 and `ubuntu-24.04` x86-64 runners.
-Linux has a pinned upstream engine but Webskiff's runner results remain unverified.
+The Ubuntu job builds and exercises the real browser keyboard controls. It allows
+unprivileged user namespaces only on the disposable hosted runner so Chromium
+can keep its sandbox enabled. Linux remains experimental; see
+[sandbox startup requirements](usage.md#linux-sandbox-startup).
 There is no upstream 0.4.0 package for macOS Intel or Linux ARM64. Do not add
 matrix entries or Homebrew support by guessing archive names.
 

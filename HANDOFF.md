@@ -123,8 +123,8 @@ instead of the more expensive all-match highlighting. Config-generated help
 also sends 221 more median bytes in this run. Earlier baseline runs also showed
 approximately 85 ms native-find frames, so the occasional long frame is not
 unique to this change. The under-10-ms target is not met for every interaction.
-The user was asked to approve the measured output cost but was unavailable;
-changes remain uncommitted for review.
+The user was asked to approve the measured output cost but was unavailable.
+Changes have since been committed; performance/output approval remains open.
 
 ### Reported missing highlight and raw input (2026-11-10)
 
@@ -235,8 +235,11 @@ notarization preparation, native macOS ARM64 and experimental Linux x86-64 CI,
 and protected draft-only releases. Public packaging fails without a selected
 project license and reviewed third-party notices. These file checks are not legal
 clearance. The selected source remote is the private
-`https://github.com/engineersamuel/webskiff.git`. There is no hosted CI result,
-public release, or published tap.
+`https://github.com/engineersamuel/webskiff.git`, with source pushed to `main`.
+Native macOS CI passed the build, keyboard, relocated-engine, and Homebrew smoke
+tests. Native Linux build, keyboard, and relocated-engine checks also pass.
+The [verified native run](https://github.com/engineersamuel/webskiff/actions/runs/42887920588)
+tested source commit `1aff5b2`. There is no public release or published tap.
 
 The generated Homebrew formula keeps the binary and engine under libexec.
 A plain bin symlink failed real engine startup; the standard exec wrapper passed.
@@ -257,7 +260,8 @@ and isolated Homebrew formula installation/self-test. Workflow syntax, shell
 lint, brand asset validation, local documentation links, and recording privacy
 checks passed. The recording contains 496 output events over 18.6 seconds.
 Linux all-target source type-checking passed with an isolated target standard
-library; no native Linux link or runtime result is available.
+library. Native Linux builds, real-browser keyboard checks, and relocated-engine
+self-tests now also pass on Ubuntu 24.04.
 
 The final before/after/repeat p50/p90 timing and byte tables are in
 `docs/performance.md`. One previous-match run reached 85.72 ms p90, versus
@@ -266,12 +270,13 @@ Small samples do not prove a regression or prove its absence. Performance/output
 approval remains open. No sub-10-ms or smooth-YouTube release claim is justified.
 
 Still required before publication: ownership/license approval, reviewed engine
-notices, chosen application and tap repositories, protected GitHub release
-environment and signing/notarization secrets, successful native hosted CI,
+notices, a chosen tap repository, protected GitHub release
+environment and signing/notarization secrets, passing native hosted CI on the
+release tag,
 quarantined fresh-Mac installation, full Homebrew lifecycle tests, and actual
 terminal/video/accessibility/company-policy acceptance. Store signing secrets
 only in GitHub environment settings, not this repository or chat.
-No push, tag publication, release publication, or announcement was made.
+Source has been pushed. No tag, release, or announcement has been published.
 
 ### Renderer complexity gate
 
@@ -286,9 +291,9 @@ Full before/after/repeat p50/p90 and byte measurements are in
 release-acceptance item, including one 84.05 ms previous-match p90.
 
 The user authorized committing/pushing to `engineersamuel/webskiff` and repository
-setup, then restored personal-account authentication. Source commit `81c6fd6` is
-ready for upload. Origin uses HTTPS with a repository-local GH credential helper;
-no token is stored in this repository. The repository remains private.
+setup, then restored personal-account authentication. Source commit `81c6fd6`
+and follow-up fixes are pushed to `main`. Origin uses HTTPS with a repository-local
+GH credential helper; no token is stored in this repository. The repository remains private.
 Merge commits are disabled and rebase merging is enabled. Actions require pinned
 SHAs, allow GitHub-owned actions plus `astral-sh/setup-uv`, and default to read-only
 workflow tokens without automated review approval.
@@ -298,7 +303,11 @@ The current GitHub plan rejects private-repository rulesets and required release
 reviewers. A failed environment-protection request left an unprotected environment;
 it was removed immediately. No unprotected release environment remains.
 Do not upgrade billing or make the repository public without separate approval.
-Native hosted CI and repository-source upload are the next verification steps.
+The first hosted macOS run passed. Linux initially refused startup because
+Ubuntu blocked Chromium's sandbox namespaces. CI now allows user namespaces on
+the disposable hosted Linux runner; Chromium's sandbox was not disabled.
+Native Linux build, keyboard, and relocated-engine checks pass with that configuration.
+Keyboard failures now print the isolated engine log before deleting the test profile.
 
 ## Open items / not verified
 
@@ -309,11 +318,12 @@ Native hosted CI and repository-source upload are the next verification steps.
 - **Page down into content Chrome has not drawn** is above 10 ms. The only fix found (a taller hidden page) breaks fixed footers.
 - **Pages that focus a text box on load** (e.g. Google) capture keys: press Esc first. This matches Vimium.
 - **Not built:** downloads, bookmarks, a history list, file upload, dark-mode signal to pages.
-- **Linux:** source type-checks and an experimental native CI runner are prepared;
-  native linking and runtime remain unverified.
+- **Linux:** native build, keyboard, and relocated-engine checks pass on Ubuntu 24.04 CI;
+  real-terminal and desktop Linux acceptance remain open.
 - **zebkit bug:** `View::new_offscreen(Some(url))` fails the load at once, so zweb creates the view empty and then loads the URL. That empty first page is in history; zweb skips back over it.
 - **Choices made without asking:** `~/projects/prototypes/zebkit-probe-decisions.html` (red items need the user's confirmation).
 
 ## History
 
-`git log` has 14 commits, starting with "zweb baseline before performance work".
+History starts with "zweb baseline before performance work". Use `git log` for
+the current commits.
