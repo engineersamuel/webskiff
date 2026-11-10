@@ -237,6 +237,11 @@ try:
             for metric in rows[0]
         }
     print(json.dumps(results, indent=2))
+except AssertionError:
+    log = Path(home.name) / ".cache/zweb/zweb.log"
+    if log.exists():
+        print("BROWSER LOG:", repr(log.read_bytes()[-8000:]), flush=True)
+    raise
 finally:
     try:
         if os.waitpid(pid, os.WNOHANG)[0] == 0:
