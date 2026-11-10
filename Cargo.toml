@@ -5,6 +5,7 @@ edition = "2021"
 default-run = "webskiff"
 autobins = false
 description = "A keyboard-first Chromium browser for your terminal"
+license = "MIT"
 publish = false
 
 [[bin]]

@@ -14,16 +14,18 @@ reviewers. A protected release environment could not be configured; the partial
 unprotected environment was removed. Upgrade eligibility or separately approve
 public repository visibility before configuring these protections. Do not enable
 release jobs without them.
-This checkout has no selected project license, complete engine license bundle,
-or Apple signing credentials. Native macOS and Linux CI have passed the build,
+Webskiff's own code is licensed under MIT, with `LICENSE` and Cargo SPDX metadata
+in place. Zebkit is credited in the README and third-party notices. A complete
+reviewed engine license bundle and Apple signing credentials are still missing.
+Native macOS and Linux CI have passed the build,
 keyboard, and relocated-engine tests; macOS also passed the isolated Homebrew test.
 See the [verified native run](https://github.com/engineersamuel/webskiff/actions/runs/42887920588)
 for source commit `1aff5b2`. No fresh-machine installation has been verified.
 
 Before public distribution:
 
-1. Confirm ownership and publication approval; choose the project license.
-   Add `LICENSE` and its SPDX expression in `Cargo.toml`.
+1. Confirm publication approval and any required company clearance. The selected
+   MIT project license does not approve redistribution of third-party components.
 1. Obtain and review Zebkit/Chromium and Rust dependency notices. Put the required
    texts and notices under `packaging/third-party/`. Verify LGPL obligations with
    the engine supplier. `dependencies.json` is an inventory, not legal clearance.

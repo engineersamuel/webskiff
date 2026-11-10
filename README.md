@@ -141,6 +141,14 @@ For startup errors, graphics options, profile paths, and logs, see the
 terminal, `webskiff --version`, and a minimal public reproduction.
 Do not attach cookies, credentials, private URLs, or raw profile contents.
 
+## Credits and license
+
+Built on [Zebkit](https://github.com/ikey4u/zebkit). Credit to **ikey4u and the
+Zebkit contributors** for the Chromium embedding engine that makes Webskiff possible.
+
+Webskiff's own code is licensed under [MIT](LICENSE). Zebkit, Chromium, and other
+dependencies retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
+
 ## Development
 
 ```fish

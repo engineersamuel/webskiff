@@ -232,8 +232,10 @@ third-party notice, and release guides describe the preview limits explicitly.
 Added validated CLI help/version, Cargo-sourced version/tag checks, exact engine
 archive hashes, dependency inventories, relocatable internal packages, signing/
 notarization preparation, native macOS ARM64 and experimental Linux x86-64 CI,
-and protected draft-only releases. Public packaging fails without a selected
-project license and reviewed third-party notices. These file checks are not legal
+and protected draft-only releases. The user selected MIT for Webskiff's own code;
+`LICENSE` and Cargo SPDX metadata are in place, with explicit Zebkit credit in
+the README and third-party notices. Public packaging still requires reviewed
+third-party notices. These file checks are not legal
 clearance. The selected source remote is the private
 `https://github.com/engineersamuel/webskiff.git`, with source pushed to `main`.
 Native macOS CI passed the build, keyboard, relocated-engine, and Homebrew smoke
@@ -269,7 +271,7 @@ The final before/after/repeat p50/p90 timing and byte tables are in
 Small samples do not prove a regression or prove its absence. Performance/output
 approval remains open. No sub-10-ms or smooth-YouTube release claim is justified.
 
-Still required before publication: ownership/license approval, reviewed engine
+Still required before publication: publication/company approval, reviewed engine
 notices, a chosen tap repository, protected GitHub release
 environment and signing/notarization secrets, passing native hosted CI on the
 release tag,
