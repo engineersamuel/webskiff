@@ -393,12 +393,13 @@ impl App {
                 }
             }
             Msg::Caret { tab, on } => {
-                // A caret soon after the user's click in an editable element: type
-                // into it. A page's autofocus or a find's selection is no reason.
+                // A caret in an editable element, however it got there (a click,
+                // Tab, the page's autofocus): keys type into it, as in Vimium.
+                // Esc leaves it. A find's selection is not editable: no change.
                 if self.index_of(tab) != Some(self.active) || self.prompt.is_some() {
                     return;
                 }
-                if on && self.mode == Mode::Browse && self.last_click.0.elapsed() < Duration::from_millis(1500) {
+                if on && self.mode == Mode::Browse {
                     self.view().evaluate(EDITABLE_JS, |r| {
                         if r.as_deref() == Ok("true") {
                             send(Msg::Focused { ok: true });
