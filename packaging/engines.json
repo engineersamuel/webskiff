@@ -1,0 +1,16 @@
+{
+  "version": "0.4.0",
+  "source": "https://github.com/ikey4u/zebkit/tree/v0.4.0",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "runner": "macos-15",
+      "status": "preview",
+      "sha256": "b94bf42c6485b6226b667fe5cdb80f341b24d1a4a1d41297039d79ccd02945c8"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "runner": "ubuntu-24.04",
+      "status": "experimental",
+      "sha256": "8d46b2d1265cb9d6e492c902073670a43e1e975d173f169dbd878ed931b1e385"
+    }
+  }
+}

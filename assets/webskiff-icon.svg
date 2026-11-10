@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="20 18 190 170" role="img" aria-labelledby="title">
+  <title id="title">Webskiff icon</title>
+  <g fill="none" stroke="#b11f4b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="rotate(-8 123 99)">
+      <rect x="43" y="43" width="159" height="107" rx="9"/>
+      <path d="m58 62 9 7-9 7"/>
+      <path fill="#b11f4b" stroke="none" d="M118 56v49H80zM75 111h99l-22 22H94z"/>
+      <path d="M121 54v58"/>
+    </g>
+    <path d="M28 144c26 0 30-17 57-17M48 160c28 0 30-17 58-17"/>
+  </g>
+</svg>

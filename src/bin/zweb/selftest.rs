@@ -226,7 +226,9 @@ pub fn run() -> i32 {
     let ctx = Rc::new(Ctx::default());
     let c = ctx.clone();
     zebkit::run_with_args(["zweb", "--headless", "--zebkit-cookie-storage=file"], move || {
-        zebkit::after(Duration::from_secs(60), || {
+        let timeout_ctx = c.clone();
+        zebkit::after(Duration::from_secs(60), move || {
+            timeout_ctx.fails.set(timeout_ctx.fails.get() + 1);
             println!("TIMEOUT");
             zebkit::quit();
         });

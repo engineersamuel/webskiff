@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>keyboard fixture</title>
+<style>
+  body { margin: 20px; font: 18px sans-serif; }
+  p { margin: 20px 0; }
+  input, button { font: inherit; }
+</style>
+<button id="button" onclick="document.title='button activated'">Activate</button>
+<label for="entry">Text</label><input id="entry" oninput="if(!location.search)document.title='input:'+this.value">
+<p id="first">alpha alphabet alpha</p>
+<p id="second">alpha beta gamma</p>
+<p id="browser">Browser Browser</p>
+<script>
+  if (new URLSearchParams(location.search).has("tab")) {
+    document.getElementById("first").textContent = "Second tab: alpha alphabet alpha";
+  }
+  if (!location.search) {
+    document.addEventListener("selectionchange", () => {
+      const selection = getSelection();
+      document.title = selection.toString()
+        ? `m ${selection.anchorNode.parentElement.id}:${selection.anchorOffset}:${selection}`
+        : "keyboard fixture";
+    });
+    document.addEventListener("focusin", event => {
+      document.title = `focus ${event.target.id}`;
+    });
+  }
+  for (let i = 0; i < 200; i++) {
+    const p = document.createElement("p");
+    p.textContent = `Row ${i}: browser keyboard performance fixture.`;
+    document.body.append(p);
+  }
+</script>
+</html>

@@ -6,7 +6,9 @@
 //! Blocks: `▀` cells with truecolor, for terminals without graphics.
 //! Either way only cell rows whose pixels changed are drawn.
 
-use std::ffi::{c_void, CString};
+#[cfg(target_os = "macos")]
+use std::ffi::c_void;
+use std::ffi::CString;
 use std::io::Write;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -101,20 +103,27 @@ fn half(rgb: &[u8], w: usize, h: usize) -> (usize, usize, Vec<u8>) {
     let mut out = vec![0u8; hw * hh * 3];
     for y in 0..hh {
         for x in 0..hw {
-            for c in 0..3 {
-                let (mut sum, mut n) = (0u32, 0u32);
-                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let (sx, sy) = (2 * x + dx, 2 * y + dy);
-                    if sx < w && sy < h {
-                        sum += rgb[(sy * w + sx) * 3 + c] as u32;
-                        n += 1;
-                    }
-                }
-                out[(y * hw + x) * 3 + c] = (sum / n) as u8;
-            }
+            let at = (y * hw + x) * 3;
+            out[at..at + 3].copy_from_slice(&half_pixel(rgb, w, h, x, y));
         }
     }
     (hw, hh, out)
+}
+
+fn half_pixel(rgb: &[u8], w: usize, h: usize, x: usize, y: usize) -> [u8; 3] {
+    let mut pixel = [0; 3];
+    for (c, value) in pixel.iter_mut().enumerate() {
+        let (mut sum, mut n) = (0u32, 0u32);
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let (sx, sy) = (2 * x + dx, 2 * y + dy);
+            if sx < w && sy < h {
+                sum += rgb[(sy * w + sx) * 3 + c] as u32;
+                n += 1;
+            }
+        }
+        *value = (sum / n) as u8;
+    }
+    pixel
 }
 
 
@@ -158,6 +167,52 @@ struct Prediction {
     target: Vec<u64>,
 }
 
+struct PredictionMatch {
+    best: i32,
+    total: i32,
+    best_score: usize,
+    movable: usize,
+    total_score: usize,
+    total_known: usize,
+}
+
+impl PredictionMatch {
+    fn right(&self) -> bool {
+        self.best == self.total && self.total_score * 3 >= self.total_known * 2
+    }
+
+    fn partial(&self, prediction: &Prediction) -> bool {
+        prediction.shown
+            && self.best != self.total
+            && self.best_score * 2 >= self.movable
+            && Instant::now() < prediction.deadline
+    }
+}
+
+impl Prediction {
+    fn score(&self, real: &[u64], fixed: &[bool], bands: usize) -> PredictionMatch {
+        let total = *self.steps.last().unwrap();
+        let share = |s: i32| {
+            let want = shifted(&self.base, fixed, bands, s);
+            let known = want.iter().filter(|h| **h != BLANK).count();
+            (matches(real, &want), known.max(1))
+        };
+        let better = |a: (usize, usize), b: (usize, usize)| a.0 * b.1 > b.0 * a.1;
+        let mut best = total;
+        for s in std::iter::once(0).chain(self.steps.iter().copied()) {
+            if better(share(s), share(best)) {
+                best = s;
+            }
+        }
+        let ((best_score, movable), (mut total_score, mut total_known)) = (share(best), share(total));
+        if self.shown && self.target.len() == real.len() {
+            total_known = self.target.iter().filter(|h| **h != BLANK).count().max(1);
+            total_score = matches(real, &self.target);
+        }
+        PredictionMatch { best, total, best_score, movable, total_score, total_known }
+    }
+}
+
 /// Rows of the page seen before, by their place in it: a jump back to
 /// them (page up, then down) is shown at once too.
 #[derive(Default)]
@@ -196,15 +251,7 @@ impl Tape {
     /// Finds where the frame `real` is in the page, and records its rows.
     fn record(&mut self, real: &[u64], fixed: &[bool], bands: usize, before: &[Option<u64>]) {
         let n = real.len() / bands;
-        let sig = |r: usize| Tape::signature(&real[r * bands..(r + 1) * bands], &fixed[r * bands..(r + 1) * bands]);
-        let mut votes: HashMap<i64, usize> = HashMap::new();
-        for r in 0..n {
-            if let Some(&v) = sig(r).and_then(|s| self.places.get(&s)) {
-                if v != AMBIGUOUS {
-                    *votes.entry(v - r as i64).or_default() += 1;
-                }
-            }
-        }
+        let votes = self.offset_votes(real, fixed, bands);
         let expect = self.expect.take();
         let for_expect = expect.and_then(|e| votes.get(&e).copied()).unwrap_or(0);
         // The scroll asked for, unless the rows clearly say another place.
@@ -227,19 +274,37 @@ impl Tape {
         for r in 0..n {
             let v = off + r as i64;
             let row = &real[r * bands..(r + 1) * bands];
-            // What was there before is not there any more.
-            if let Some(old) = self.rows.insert(v, row.to_vec()).filter(|old| old != row) {
-                if let Some(s) = Tape::signature(&old, &fixed[r * bands..(r + 1) * bands]) {
-                    if self.places.get(&s) == Some(&v) {
-                        self.places.remove(&s);
-                    }
+            self.record_row(v, row, &fixed[r * bands..(r + 1) * bands]);
+        }
+    }
+
+    fn offset_votes(&self, real: &[u64], fixed: &[bool], bands: usize) -> HashMap<i64, usize> {
+        let mut votes = HashMap::new();
+        for r in 0..real.len() / bands {
+            let tiles = r * bands..(r + 1) * bands;
+            let signature = Tape::signature(&real[tiles.clone()], &fixed[tiles]);
+            if let Some(&v) = signature.and_then(|s| self.places.get(&s)) {
+                if v != AMBIGUOUS {
+                    *votes.entry(v - r as i64).or_default() += 1;
                 }
             }
-            if let Some(s) = sig(r) {
-                let e = self.places.entry(s).or_insert(v);
-                if *e != v {
-                    *e = AMBIGUOUS;
+        }
+        votes
+    }
+
+    fn record_row(&mut self, v: i64, row: &[u64], fixed: &[bool]) {
+        // What was there before is not there any more.
+        if let Some(old) = self.rows.insert(v, row.to_vec()).filter(|old| old != row) {
+            if let Some(s) = Tape::signature(&old, fixed) {
+                if self.places.get(&s) == Some(&v) {
+                    self.places.remove(&s);
                 }
+            }
+        }
+        if let Some(s) = Tape::signature(row, fixed) {
+            let e = self.places.entry(s).or_insert(v);
+            if *e != v {
+                *e = AMBIGUOUS;
             }
         }
     }
@@ -352,6 +417,97 @@ impl Rows {
             out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={id},p={},q=2\x1b\\", t + 1).as_bytes());
         }
     }
+
+    fn has_blurry_tiles(&self) -> bool {
+        self.refine.keys().any(|h| self.shown.contains(&Some(*h)))
+    }
+
+    fn wake_deadline(&self) -> Option<Instant> {
+        let refine = self.has_blurry_tiles().then(|| self.drawn_at + REFINE_AFTER);
+        self.prediction.as_ref().map(|pr| pr.deadline).or(refine)
+    }
+
+    fn prediction_target(&self, total: i32) -> Vec<u64> {
+        let pr = self.prediction.as_ref().unwrap();
+        let mut target = shifted(&pr.base, &self.fixed, self.bands, total);
+        let Some(off) = pr.base_offset else { return target };
+        // Tiles scrolled in from beyond the screen: from the tape, if seen.
+        for (t, h) in target.iter_mut().enumerate() {
+            if *h == BLANK && !self.fixed[t] {
+                let seen = self.tape.rows.get(&(off + (t / self.bands) as i64 + total as i64))
+                    .map(|row| row[t % self.bands]);
+                if let Some(tile) = seen.filter(|tile| self.cache.contains_key(tile)) {
+                    *h = tile;
+                }
+            }
+        }
+        target
+    }
+
+    fn learn_fixed(&mut self, base: &[u64], real: &[u64], total: i32) {
+        // Not from the background: blank tiles look the same anywhere.
+        let mut counts: HashMap<u64, usize> = HashMap::new();
+        base.iter().for_each(|h| *counts.entry(*h).or_default() += 1);
+        let background = counts.into_iter().max_by_key(|(_, c)| *c).map(|(h, _)| h);
+        for t in 0..real.len() {
+            let from = t as i64 + total as i64 * self.bands as i64;
+            let inside = from >= 0 && (from as usize) < real.len();
+            // Something else would be here had this tile scrolled.
+            let other = !inside || base[from as usize] != base[t];
+            if real[t] == base[t] && other && Some(real[t]) != background {
+                self.fixed[t] = true;
+            } else if real[t] != base[t] {
+                self.fixed[t] = false;
+            }
+        }
+    }
+
+    fn prepare_tile(&mut self, pixels: &mut Pixels, layout: &Layout, t: usize, hash: u64, out: &mut Vec<u8>) -> Part {
+        let (w, h) = (pixels.w, pixels.h);
+        let px_row = |r: u16| (r as u64 * h as u64 / layout.rows as u64) as usize;
+        let px_col = |c: u16| c as usize * w / layout.cols as usize;
+        let (r, col, cols) = self.cell(layout, t);
+        let (y0, y1) = (px_row(r), px_row(r + 1));
+        let (x0, x1) = (px_col(col), px_col(col + cols));
+        let id = self.next_id;
+        self.next_id += 1;
+        self.clock += 1;
+        // Neighbour pixels prevent seams when the terminal scales the tile.
+        let (bx0, by0) = (x0.saturating_sub(1), y0.saturating_sub(1));
+        let (bx1, by1) = ((x1 + 1).min(w), (y1 + 1).min(h));
+        let rgb = pixels.rgb(bx0, by0, bx1 - bx0, by1 - by0);
+        let inner = (x0 - bx0, y0 - by0, x1 - x0, y1 - y0);
+        let src = format!("x={},y={},w={},h={},", inner.0, inner.1, inner.2, inner.3);
+        out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
+        let place = format!("p={},c={cols},r=1,C=1,q=2", t + 1);
+        let size = rgb.len();
+        self.cache.insert(hash, Cached { id, used: self.clock, size, src: src.clone() });
+        let part = Part { before: std::mem::take(out), w: bx1 - bx0, h: by1 - by0, inner, src, id, place, rgb, hash };
+        self.bytes += size;
+        // Delete the previous placement only after the new image is sent.
+        self.unplace(out, t, self.shown[t]);
+        self.shown[t] = Some(hash);
+        part
+    }
+
+    fn evict(&mut self, out: &mut Vec<u8>) {
+        if self.bytes <= CACHE_BYTES || self.prediction.is_some() {
+            return;
+        }
+        let on_screen: std::collections::HashSet<u64> = self.shown.iter().flatten().copied().collect();
+        let mut old: Vec<(u64, u64)> =
+            self.cache.iter().filter(|(h, _)| !on_screen.contains(h)).map(|(h, c)| (c.used, *h)).collect();
+        old.sort_unstable();
+        for (_, h) in old {
+            if self.bytes <= CACHE_BYTES * 3 / 4 {
+                break;
+            }
+            let c = self.cache.remove(&h).unwrap();
+            self.refine.remove(&h);
+            self.bytes -= c.size;
+            out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", c.id).as_bytes());
+        }
+    }
 }
 
 /// Tiles of `base` scrolled by `shift` rows (down > 0), fixed tiles kept,
@@ -373,6 +529,19 @@ fn shifted(base: &[u64], fixed: &[bool], bands: usize, shift: i32) -> Vec<u64> {
 /// How many rows of `real` are the rows of `want` (BLANK rows not counted).
 fn matches(real: &[u64], want: &[u64]) -> usize {
     real.iter().zip(want).filter(|(a, b)| **b != BLANK && a == b).count()
+}
+
+impl Pending {
+    fn busy(&self) -> bool {
+        self.page.is_some()
+            || self.popup.is_some()
+            || !self.text.is_empty()
+            || self.predict != 0
+            || self.clear_popup
+            || self.clear_all
+            || self.forget
+            || self.stop
+    }
 }
 
 impl Renderer {
@@ -442,108 +611,108 @@ impl Renderer {
     pub fn run(&self) {
         let mut rows = Rows::new();
         loop {
-            let mut p = self.pending.lock().unwrap();
-            loop {
-                let busy = p.page.is_some()
-                    || p.popup.is_some()
-                    || !p.text.is_empty()
-                    || p.predict != 0
-                    || p.clear_popup
-                    || p.clear_all
-                    || p.forget
-                    || p.stop;
-                if busy {
-                    break;
-                }
-                let blurry = rows.refine.keys().any(|h| rows.shown.contains(&Some(*h)));
-                let refine = blurry.then(|| rows.drawn_at + REFINE_AFTER);
-                match rows.prediction.as_ref().map(|pr| pr.deadline).or(refine) {
-                    Some(deadline) => {
-                        let now = Instant::now();
-                        if now >= deadline {
-                            break;
-                        }
-                        p = self.wake.wait_timeout(p, deadline - now).unwrap().0;
-                    }
-                    None => p = self.wake.wait(p).unwrap(),
-                }
-            }
-            let layout = *self.layout.lock().unwrap();
-            if layout.hidden {
-                p.page = None;
-                p.popup = None;
-                p.predict = 0;
-            }
-            let page = p.page.take();
-            let text = std::mem::take(&mut p.text);
-            let predict = std::mem::take(&mut p.predict);
-            let forget = std::mem::take(&mut p.forget);
-            let (popup, clear_popup, clear_all, stop) =
-                (p.popup.take(), std::mem::take(&mut p.clear_popup), std::mem::take(&mut p.clear_all), p.stop);
-            drop(p);
-            let mut out = Vec::new();
-            if clear_all {
-                rows.reset();
-                if self.gfx != Gfx::Blocks {
-                    out.extend_from_slice(b"\x1b_Ga=d,d=A,q=2\x1b\\");
-                }
-            }
-            if forget {
-                rows.fixed.fill(false);
-                rows.misses = 0;
-                rows.tape.clear();
-            }
-            if clear_popup {
-                if self.gfx == Gfx::Blocks {
-                    // The popup was drawn over page cells: draw them all again.
-                    rows.shown.fill(None);
-                } else {
-                    out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={POPUP_ID},q=2\x1b\\").as_bytes());
-                }
-            }
-            out.extend_from_slice(&text);
-            if predict != 0 && self.gfx != Gfx::Blocks {
-                self.show_prediction(&mut out, &layout, &mut rows, predict);
-            }
-            if !out.is_empty() {
-                write_out(&out);
-                if predict != 0 {
-                    crate::trace!("predict written {predict}");
-                }
-            }
-            if stop {
+            let (layout, pending) = self.wait_pending(&rows);
+            self.write_pending(&pending, &layout, &mut rows);
+            if pending.stop {
                 return;
             }
-            let page = match page {
+            let page = match pending.page {
                 Some(frame) => self.settle(frame, &layout, &mut rows),
-                // No frame came in time: the newest held one, or back to how it was.
-                None if rows.prediction.as_ref().is_some_and(|pr| Instant::now() >= pr.deadline) => {
-                    let pr = rows.prediction.take().unwrap();
-                    if pr.shown {
-                        self.miss(&mut rows);
-                    }
-                    if pr.shown && pr.held.is_none() {
-                        let mut out = Vec::new();
-                        for t in 0..pr.base.len() {
-                            rows.place(&mut out, &layout, t, pr.base[t]);
-                        }
-                        write_out(&out);
-                    }
-                    pr.held
-                }
-                None => None,
+                None => self.expire_prediction(&layout, &mut rows),
             };
             if let Some(frame) = page {
                 self.draw_page(&frame, &layout, &mut rows);
             }
-            if let (Some(frame), Some(_)) = (popup, layout.popup) {
+            if let (Some(frame), Some(_)) = (pending.popup, layout.popup) {
                 self.draw_popup(&frame, &layout);
             }
-            let on_screen = rows.refine.keys().any(|h| rows.shown.contains(&Some(*h)));
+            let on_screen = rows.has_blurry_tiles();
             if rows.prediction.is_none() && on_screen && rows.drawn_at.elapsed() >= REFINE_AFTER {
                 self.refine(&layout, &mut rows);
             }
         }
+    }
+
+    fn wait_pending(&self, rows: &Rows) -> (Layout, Pending) {
+        let mut p = self.pending.lock().unwrap();
+        while !p.busy() {
+            match rows.wake_deadline() {
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    p = self.wake.wait_timeout(p, deadline - now).unwrap().0;
+                }
+                None => p = self.wake.wait(p).unwrap(),
+            }
+        }
+        let layout = *self.layout.lock().unwrap();
+        if layout.hidden {
+            p.page = None;
+            p.popup = None;
+            p.predict = 0;
+        }
+        let pending = std::mem::take(&mut *p);
+        p.stop = pending.stop;
+        (layout, pending)
+    }
+
+    fn clear_pending(&self, pending: &Pending, rows: &mut Rows, out: &mut Vec<u8>) {
+        if pending.clear_all {
+            rows.reset();
+            if self.gfx != Gfx::Blocks {
+                out.extend_from_slice(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+            }
+        }
+        if pending.forget {
+            rows.fixed.fill(false);
+            rows.misses = 0;
+            rows.tape.clear();
+        }
+        if pending.clear_popup {
+            if self.gfx == Gfx::Blocks {
+                // The popup was drawn over page cells: draw them all again.
+                rows.shown.fill(None);
+            } else {
+                out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={POPUP_ID},q=2\x1b\\").as_bytes());
+            }
+        }
+    }
+
+    fn write_pending(&self, pending: &Pending, layout: &Layout, rows: &mut Rows) {
+        let mut out = Vec::new();
+        self.clear_pending(pending, rows, &mut out);
+        out.extend_from_slice(&pending.text);
+        if pending.predict != 0 && self.gfx != Gfx::Blocks {
+            self.show_prediction(&mut out, layout, rows, pending.predict);
+        }
+        if !out.is_empty() {
+            write_out(&out);
+            if pending.predict != 0 {
+                crate::trace!("predict written {}", pending.predict);
+            }
+        }
+    }
+
+    fn expire_prediction(&self, layout: &Layout, rows: &mut Rows) -> Option<Frame> {
+        let deadline = rows.prediction.as_ref()?.deadline;
+        if Instant::now() < deadline {
+            return None;
+        }
+        let pr = rows.prediction.take().unwrap();
+        if pr.shown {
+            self.miss(rows);
+        }
+        // No frame came in time: the newest held one, or back to how it was.
+        if pr.shown && pr.held.is_none() {
+            let mut out = Vec::new();
+            for t in 0..pr.base.len() {
+                rows.place(&mut out, layout, t, pr.base[t]);
+            }
+            write_out(&out);
+        }
+        pr.held
     }
 
     /// Sends sharp the photo tiles still shown blurry.
@@ -603,16 +772,8 @@ impl Renderer {
         if rows.shown.len() != n || rows.fixed.len() != n {
             return;
         }
-        if rows.prediction.is_none() {
-            // Only from a screen of known rows.
-            if rows.shown.iter().any(|h| h.is_none_or(|h| h == BLANK || !rows.cache.contains_key(&h))) {
-                return;
-            }
-            let base = rows.shown.iter().map(|h| h.unwrap()).collect();
-            let shown = self.predict_ok.load(Ordering::Relaxed);
-            let base_offset = rows.tape.offset;
-            rows.prediction =
-                Some(Prediction { base, steps: Vec::new(), deadline: Instant::now(), held: None, shown, base_offset, target: Vec::new() });
+        if !self.start_prediction(rows) {
+            return;
         }
         let pr = rows.prediction.as_mut().unwrap();
         let total = pr.steps.last().copied().unwrap_or(0) + delta;
@@ -622,20 +783,10 @@ impl Renderer {
             return;
         }
         let bands = rows.bands;
-        let mut target = shifted(&pr.base, &rows.fixed, bands, total);
-        // Tiles scrolled in from beyond the screen: from the tape, if seen.
-        if let Some(off) = pr.base_offset {
-            for (t, h) in target.iter_mut().enumerate() {
-                if *h == BLANK && !rows.fixed[t] {
-                    let seen = rows.tape.rows.get(&(off + (t / bands) as i64 + total as i64)).map(|row| row[t % bands]);
-                    if let Some(tile) = seen.filter(|tile| rows.cache.contains_key(tile)) {
-                        *h = tile;
-                    }
-                }
-            }
-        }
+        let target = rows.prediction_target(total);
         // Never a screen of background: unknown rows wait for the page.
         let unknown = target.iter().filter(|h| **h == BLANK).count();
+        let pr = rows.prediction.as_mut().unwrap();
         pr.target = target.clone();
         if unknown > MAX_UNKNOWN_ROWS * bands {
             pr.shown = false;
@@ -652,6 +803,22 @@ impl Renderer {
         }
     }
 
+    fn start_prediction(&self, rows: &mut Rows) -> bool {
+        if rows.prediction.is_some() {
+            return true;
+        }
+        // Only from a screen of known rows.
+        if rows.shown.iter().any(|h| h.is_none_or(|h| h == BLANK || !rows.cache.contains_key(&h))) {
+            return false;
+        }
+        let base = rows.shown.iter().map(|h| h.unwrap()).collect();
+        let shown = self.predict_ok.load(Ordering::Relaxed);
+        let base_offset = rows.tape.offset;
+        rows.prediction =
+            Some(Prediction { base, steps: Vec::new(), deadline: Instant::now(), held: None, shown, base_offset, target: Vec::new() });
+        true
+    }
+
     /// While a prediction waits: a frame that shows the whole scroll ends it
     /// (and teaches which rows are fixed); one that shows less is held back.
     fn settle(&self, frame: Frame, layout: &Layout, rows: &mut Rows) -> Option<Frame> {
@@ -662,55 +829,24 @@ impl Renderer {
             return Some(frame);
         }
         let real = Pixels::new(&frame).tile_hashes(layout.rows, layout.cols, rows.bands);
-        let bands = rows.bands;
-        let total = *pr.steps.last().unwrap();
-        // The shift this frame shows best: none yet, a step, or all of it,
-        // by the share of the tiles each would know that are right.
-        let share = |s: i32| {
-            let want = shifted(&pr.base, &rows.fixed, bands, s);
-            let known = want.iter().filter(|h| **h != BLANK).count();
-            (matches(&real, &want), known.max(1))
-        };
-        let better = |a: (usize, usize), b: (usize, usize)| a.0 * b.1 > b.0 * a.1;
-        let mut best = total;
-        for s in std::iter::once(0).chain(pr.steps.iter().copied()) {
-            if better(share(s), share(best)) {
-                best = s;
-            }
-        }
-        let ((best_score, movable), (mut total_score, mut total_known)) = (share(best), share(total));
-        // Judge a shown prediction by what was shown.
-        if pr.shown && pr.target.len() == real.len() {
-            total_known = pr.target.iter().filter(|h| **h != BLANK).count().max(1);
-            total_score = matches(&real, &pr.target);
-        }
-        if pr.shown && best != total && best_score * 2 >= movable && Instant::now() < pr.deadline {
+        let score = pr.score(&real, &rows.fixed, rows.bands);
+        if score.partial(pr) {
             rows.prediction.as_mut().unwrap().held = Some(frame);
             return None;
         }
         let pr = rows.prediction.take().unwrap();
-        let right = best == total && total_score * 3 >= total_known * 2;
+        self.record_prediction(rows, &pr, &score, &real);
+        Self::trace_prediction(rows, &pr, &score, &real);
+        Some(frame)
+    }
+
+    fn record_prediction(&self, rows: &mut Rows, pr: &Prediction, score: &PredictionMatch, real: &[u64]) {
+        let right = score.right();
         if right {
-            rows.tape.expect = pr.base_offset.map(|o| o + total as i64);
+            rows.tape.expect = pr.base_offset.map(|o| o + score.total as i64);
         }
-        // Learn the fixed tiles: same as before though the rest moved. Not
-        // from the page's background (blank tiles look the same anywhere).
-        if right && total != 0 {
-            let mut counts: HashMap<u64, usize> = HashMap::new();
-            pr.base.iter().for_each(|h| *counts.entry(*h).or_default() += 1);
-            let background = counts.into_iter().max_by_key(|(_, c)| *c).map(|(h, _)| h);
-            for t in 0..real.len() {
-                let from = t as i64 + total as i64 * bands as i64;
-                let inside = from >= 0 && (from as usize) < real.len();
-                // Something else would be here had the tile scrolled (or nothing
-                // known, at the edge it scrolled in from).
-                let other = !inside || pr.base[from as usize] != pr.base[t];
-                if real[t] == pr.base[t] && other && Some(real[t]) != background {
-                    rows.fixed[t] = true;
-                } else if real[t] != pr.base[t] {
-                    rows.fixed[t] = false;
-                }
-            }
+        if right && score.total != 0 {
+            rows.learn_fixed(&pr.base, real, score.total);
         }
         if !pr.shown {
             rows.hits = if right { rows.hits + 1 } else { 0 };
@@ -723,13 +859,16 @@ impl Renderer {
         } else {
             self.miss(rows);
         }
+    }
+
+    fn trace_prediction(rows: &Rows, pr: &Prediction, score: &PredictionMatch, real: &[u64]) {
         if crate::trace::on() {
-            let want = if pr.target.len() == real.len() { pr.target.clone() } else { shifted(&pr.base, &rows.fixed, bands, total) };
+            let PredictionMatch { best, total, total_score, total_known, .. } = score;
+            let want = if pr.target.len() == real.len() { pr.target.clone() } else { shifted(&pr.base, &rows.fixed, rows.bands, *total) };
             let off: Vec<usize> = (0..real.len()).filter(|&r| want[r] != BLANK && want[r] != real[r]).collect();
             let fixed: Vec<usize> = (0..real.len()).filter(|&r| rows.fixed[r]).collect();
             crate::trace!("settled{} best {best} of {total}, score {total_score} of {total_known}, wrong rows {off:?}, fixed {fixed:?}", if pr.shown { "" } else { " (unshown)" });
         }
-        Some(frame)
     }
 
     fn draw_page(&self, frame: &Frame, layout: &Layout, rows: &mut Rows) {
@@ -739,111 +878,20 @@ impl Renderer {
             return;
         }
         let mut out = Vec::new();
-        let key = (w, h, layout.top, layout.cols, layout.rows);
-        if rows.key != Some(key) {
-            if self.gfx != Gfx::Blocks && !rows.cache.is_empty() {
-                out.extend_from_slice(b"\x1b_Ga=d,d=A,q=2\x1b\\");
-            }
-            rows.reset();
-            rows.key = Some(key);
-            rows.bands = (layout.cols as usize / TILE_COLS).clamp(1, 12);
-            rows.shown = vec![None; layout.rows as usize * rows.bands];
-            rows.fixed = vec![false; layout.rows as usize * rows.bands];
-        }
-        // Pixel row where cell row `r` of the page starts.
-        let px_row = |r: u16| (r as u64 * h as u64 / layout.rows as u64) as usize;
-        let (mut sent, mut moved) = (0u16, 0u16);
+        self.prepare_page((w, h), layout, rows, &mut out);
         let mut pixels = Pixels::new(frame);
         let hashes = pixels.tile_hashes(layout.rows, layout.cols, rows.bands);
-        // (bytes before, image keys, pixels) of each new tile, in order.
-        let mut parts: Vec<Part> = Vec::new();
         if self.gfx != Gfx::Blocks {
             let before = rows.shown.clone();
             rows.tape.record(&hashes, &rows.fixed, rows.bands, &before);
         }
-        // The page's background, for tiles not known yet: at the left edge of
-        // the middle row (the bottom often is a fixed footer).
+        // The middle left edge avoids fixed footers when sampling background.
         let (br, bg, bb) = pixels.at(1, h as usize / 2);
         rows.bg = [br, bg, bb];
-        let px_col = |c: u16| c as usize * w as usize / layout.cols as usize;
-        for t in 0..hashes.len() {
-            let hash = hashes[t];
-            if rows.shown[t] == Some(hash) {
-                continue;
-            }
-            if self.gfx == Gfx::Blocks {
-                // Cells: the whole row again.
-                let r = (t / rows.bands) as u16;
-                let row = r as usize * rows.bands..(r as usize + 1) * rows.bands;
-                rows.shown[row.clone()].iter_mut().zip(&hashes[row]).for_each(|(s, h)| *s = Some(*h));
-                blocks(&mut pixels, &mut out, 0, layout.top, layout.cols, layout.rows, r, r + 1);
-                sent += 1;
-                continue;
-            }
-            if rows.place(&mut out, layout, t, hash) {
-                moved += 1;
-                continue;
-            }
-            let (r, col, cols) = rows.cell(layout, t);
-            let (y0, y1) = (px_row(r), px_row(r + 1));
-            let (x0, x1) = (px_col(col), px_col(col + cols));
-            let id = rows.next_id;
-            rows.next_id += 1;
-            rows.clock += 1;
-            // With a 1-pixel border of its neighbours: a terminal that scales
-            // smoothly blends edges with them, not with see-through pixels.
-            let (bx0, by0) = (x0.saturating_sub(1), y0.saturating_sub(1));
-            let (bx1, by1) = ((x1 + 1).min(w as usize), (y1 + 1).min(h as usize));
-            let rgb = pixels.rgb(bx0, by0, bx1 - bx0, by1 - by0);
-            let inner = (x0 - bx0, y0 - by0, x1 - x0, y1 - y0);
-            let src = format!("x={},y={},w={},h={},", inner.0, inner.1, inner.2, inner.3);
-            out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
-            let place = format!("p={},c={cols},r=1,C=1,q=2", t + 1);
-            // Encoded below, on several threads.
-            let size = rgb.len();
-            rows.cache.insert(hash, Cached { id, used: rows.clock, size, src: src.clone() });
-            parts.push(Part { before: std::mem::take(&mut out), w: bx1 - bx0, h: by1 - by0, inner, src, id, place, rgb, hash });
-            rows.bytes += size;
-            // The tile's previous placement goes after the new one is there: no
-            // flicker. Lowercase: the image stays in the terminal for reuse.
-            rows.unplace(&mut out, t, rows.shown[t]);
-            rows.shown[t] = Some(hash);
-            sent += 1;
-        }
+        let (parts, sent, moved) = self.draw_tiles(&mut pixels, layout, rows, &hashes, &mut out);
         drop(pixels);
-        if !parts.is_empty() {
-            let encoded = self.encode_all(&parts);
-            let mut all = Vec::with_capacity(encoded.iter().map(|e| e.0.len()).sum::<usize>() + out.len() + 4096);
-            for (part, (image, blurry)) in parts.into_iter().zip(encoded) {
-                all.extend_from_slice(&part.before);
-                all.extend_from_slice(&image);
-                if blurry {
-                    // Shown whole until sent sharp (refine).
-                    if let Some(c) = rows.cache.get_mut(&part.hash) {
-                        c.src.clear();
-                    }
-                    rows.refine.insert(part.hash, (part.w, part.h, part.rgb, part.src));
-                }
-            }
-            all.extend_from_slice(&out);
-            out = all;
-        }
-        // Over the budget: free the least recently used images not on screen.
-        if rows.bytes > CACHE_BYTES && rows.prediction.is_none() {
-            let on_screen: std::collections::HashSet<u64> = rows.shown.iter().flatten().copied().collect();
-            let mut old: Vec<(u64, u64)> =
-                rows.cache.iter().filter(|(h, _)| !on_screen.contains(h)).map(|(h, c)| (c.used, *h)).collect();
-            old.sort_unstable();
-            for (_, h) in old {
-                if rows.bytes <= CACHE_BYTES * 3 / 4 {
-                    break;
-                }
-                let c = rows.cache.remove(&h).unwrap();
-                rows.refine.remove(&h);
-                rows.bytes -= c.size;
-                out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", c.id).as_bytes());
-            }
-        }
+        out = self.encode_parts(parts, out, rows);
+        rows.evict(&mut out);
         if out.is_empty() {
             return;
         }
@@ -859,6 +907,69 @@ impl Renderer {
         s.moved = moved;
         s.width = w;
         s.height = h;
+    }
+
+    fn prepare_page(&self, size: (u32, u32), layout: &Layout, rows: &mut Rows, out: &mut Vec<u8>) {
+        let key = (size.0, size.1, layout.top, layout.cols, layout.rows);
+        if rows.key != Some(key) {
+            if self.gfx != Gfx::Blocks && !rows.cache.is_empty() {
+                out.extend_from_slice(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+            }
+            rows.reset();
+            rows.key = Some(key);
+            rows.bands = (layout.cols as usize / TILE_COLS).clamp(1, 12);
+            rows.shown = vec![None; layout.rows as usize * rows.bands];
+            rows.fixed = vec![false; layout.rows as usize * rows.bands];
+        }
+    }
+
+    fn draw_tiles(&self, pixels: &mut Pixels, layout: &Layout, rows: &mut Rows, hashes: &[u64], out: &mut Vec<u8>) -> (Vec<Part>, u16, u16) {
+        let (mut sent, mut moved) = (0u16, 0u16);
+        // (bytes before, image keys, pixels) of each new tile, in order.
+        let mut parts: Vec<Part> = Vec::new();
+        for t in 0..hashes.len() {
+            let hash = hashes[t];
+            if rows.shown[t] == Some(hash) {
+                continue;
+            }
+            if self.gfx == Gfx::Blocks {
+                // Cells: the whole row again.
+                let r = (t / rows.bands) as u16;
+                let row = r as usize * rows.bands..(r as usize + 1) * rows.bands;
+                rows.shown[row.clone()].iter_mut().zip(&hashes[row]).for_each(|(s, h)| *s = Some(*h));
+                blocks(pixels, out, 0, layout.top, layout.cols, layout.rows, r, r + 1);
+                sent += 1;
+                continue;
+            }
+            if rows.place(out, layout, t, hash) {
+                moved += 1;
+                continue;
+            }
+            parts.push(rows.prepare_tile(pixels, layout, t, hash, out));
+            sent += 1;
+        }
+        (parts, sent, moved)
+    }
+
+    fn encode_parts(&self, parts: Vec<Part>, out: Vec<u8>, rows: &mut Rows) -> Vec<u8> {
+        if parts.is_empty() {
+            return out;
+        }
+        let encoded = self.encode_all(&parts);
+        let mut all = Vec::with_capacity(encoded.iter().map(|e| e.0.len()).sum::<usize>() + out.len() + 4096);
+        for (part, (image, blurry)) in parts.into_iter().zip(encoded) {
+            all.extend_from_slice(&part.before);
+            all.extend_from_slice(&image);
+            if blurry {
+                // Shown whole until sent sharp (refine).
+                if let Some(c) = rows.cache.get_mut(&part.hash) {
+                    c.src.clear();
+                }
+                rows.refine.insert(part.hash, (part.w, part.h, part.rgb, part.src));
+            }
+        }
+        all.extend_from_slice(&out);
+        all
     }
 
     fn draw_popup(&self, frame: &Frame, layout: &Layout) {
@@ -954,6 +1065,7 @@ fn write_out(bytes: &[u8]) {
     let _ = out.flush();
 }
 
+#[cfg(target_os = "macos")]
 #[link(name = "IOSurface", kind = "framework")]
 extern "C" {
     fn IOSurfaceLock(surface: *mut c_void, options: u32, seed: *mut u32) -> i32;
@@ -964,6 +1076,7 @@ extern "C" {
 
 /// A frame's BGRA pixels, locked for reading while this lives.
 pub struct Pixels {
+    #[cfg(target_os = "macos")]
     surface: Option<*mut c_void>,
     base: *const u8,
     stride: usize,
@@ -975,13 +1088,20 @@ impl Pixels {
     pub fn new(frame: &Frame) -> Pixels {
         let (w, h) = (frame.width() as usize, frame.height() as usize);
         match frame.buffer() {
+            #[cfg(target_os = "macos")]
             FrameBuffer::IoSurface(surface) => unsafe {
                 IOSurfaceLock(surface, 1, std::ptr::null_mut());
                 let base = IOSurfaceGetBaseAddress(surface) as *const u8;
                 Pixels { surface: Some(surface), base, stride: IOSurfaceGetBytesPerRow(surface), w, h }
             },
+            #[cfg(not(target_os = "macos"))]
+            FrameBuffer::IoSurface(_) => panic!("IOSurface frames require macOS"),
             FrameBuffer::SharedMemory { pixels, stride, .. } => {
-                Pixels { surface: None, base: pixels.as_ptr(), stride, w, h }
+                Pixels {
+                    #[cfg(target_os = "macos")]
+                    surface: None,
+                    base: pixels.as_ptr(), stride, w, h
+                }
             }
             FrameBuffer::Dmabuf { .. } => panic!("dmabuf frames are not handled"),
         }
@@ -1037,6 +1157,7 @@ impl Pixels {
 
 impl Drop for Pixels {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
         if let Some(surface) = self.surface {
             unsafe { IOSurfaceUnlock(surface, 1, std::ptr::null_mut()) };
         }
@@ -1119,6 +1240,146 @@ fn blocks(px: &mut Pixels, out: &mut Vec<u8>, col: u16, row: u16, cols: u16, row
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn half_averages_partial_edge_pixels() {
+        let rgb: Vec<u8> = (0..9).flat_map(|i| [i * 10, i * 10 + 1, i * 10 + 2]).collect();
+        assert_eq!(half(&rgb, 3, 3), (2, 2, vec![20, 21, 22, 35, 36, 37, 65, 66, 67, 80, 81, 82]));
+        assert_eq!(half(&[8, 4, 2], 1, 1), (1, 1, vec![8, 4, 2]));
+    }
+
+    #[test]
+    fn tape_tracks_scroll_and_removes_replaced_signatures() {
+        let mut tape = Tape::default();
+        let fixed = [false; 8];
+        tape.record(&[11, 21, 12, 22, 13, 23, 14, 24], &fixed, 2, &[]);
+        let start = tape.offset.unwrap();
+        tape.record(&[12, 22, 13, 23, 14, 24, 15, 25], &fixed, 2, &[]);
+        assert_eq!(tape.offset, Some(start + 1));
+        assert_eq!(tape.rows[&(start + 4)], vec![15, 25]);
+        let old = Tape::signature(&[13, 23], &[false; 2]).unwrap();
+        tape.expect = tape.offset;
+        tape.record(&[12, 22, 100, 200, 14, 24, 15, 25], &fixed, 2, &[]);
+        assert!(!tape.places.contains_key(&old));
+        assert_eq!(tape.rows[&(start + 2)], vec![100, 200]);
+    }
+
+    #[test]
+    fn tape_does_not_locate_a_frame_from_ambiguous_rows() {
+        let mut tape = Tape::default();
+        let real = [1, 2, 1, 2, 1, 2];
+        tape.record(&real, &[false; 6], 2, &[]);
+        let start = tape.offset;
+        let signature = Tape::signature(&real[..2], &[false; 2]).unwrap();
+        assert_eq!(tape.places[&signature], AMBIGUOUS);
+        tape.record(&real, &[false; 6], 2, &[]);
+        assert_ne!(tape.offset, start);
+    }
+
+    #[test]
+    fn prediction_reuses_tape_tiles_and_holds_unknown_screens() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let layout = Layout { rows: 5, cols: 16, ..Layout::default() };
+        let mut rows = Rows::new();
+        rows.shown = (10..15).map(Some).collect();
+        rows.fixed = vec![false; 5];
+        for id in 10..16 {
+            rows.cache.insert(id as u64, Cached { id, used: 0, size: 3, src: String::new() });
+        }
+        rows.tape.offset = Some(100);
+        rows.tape.rows.insert(105, vec![15]);
+        let mut out = Vec::new();
+        renderer.show_prediction(&mut out, &layout, &mut rows, 1);
+        assert_eq!(rows.shown, vec![Some(11), Some(12), Some(13), Some(14), Some(15)]);
+        assert!(rows.prediction.as_ref().unwrap().shown);
+        assert!(out.starts_with(b"\x1b[1;1H\x1b_Ga=p,i=11,p=1,c=16,r=1,C=1,q=2\x1b\\\x1b_Ga=d,d=i,i=10,p=1,q=2\x1b\\"));
+        out.clear();
+        renderer.show_prediction(&mut out, &layout, &mut rows, 5);
+        assert!(out.is_empty());
+        assert!(!rows.prediction.as_ref().unwrap().shown);
+        assert_eq!(rows.shown, vec![Some(11), Some(12), Some(13), Some(14), Some(15)]);
+    }
+
+    #[test]
+    fn prediction_scores_partial_steps_and_recovers_after_hidden_hits() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let mut rows = Rows::new();
+        rows.fixed = vec![false; 5];
+        let mut prediction = Prediction {
+            base: vec![1, 2, 3, 4, 5], steps: vec![1, 2],
+            deadline: Instant::now() + SETTLE, held: None, shown: true,
+            base_offset: Some(100), target: vec![3, 4, 5, BLANK, BLANK],
+        };
+        let partial = prediction.score(&[2, 3, 4, 5, 6], &rows.fixed, 1);
+        assert!(partial.partial(&prediction));
+        assert!(!partial.right());
+        let real = [3, 4, 5, 6, 7];
+        let complete = prediction.score(&real, &rows.fixed, 1);
+        assert!(complete.right());
+        renderer.record_prediction(&mut rows, &prediction, &complete, &real);
+        assert_eq!(rows.tape.expect, Some(102));
+        renderer.miss(&mut rows);
+        renderer.miss(&mut rows);
+        assert!(!renderer.predict_ok.load(Ordering::Relaxed));
+        prediction.shown = false;
+        for _ in 0..3 {
+            renderer.record_prediction(&mut rows, &prediction, &complete, &real);
+        }
+        assert!(renderer.predict_ok.load(Ordering::Relaxed));
+        assert_eq!(rows.misses, 0);
+    }
+
+    #[test]
+    fn pending_keeps_clear_text_and_stop_when_page_is_hidden() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        renderer.layout.lock().unwrap().hidden = true;
+        *renderer.pending.lock().unwrap() = Pending {
+            text: b"help".to_vec(), predict: 2, clear_all: true,
+            clear_popup: true, forget: true, stop: true, ..Pending::default()
+        };
+        let (layout, pending) = renderer.wait_pending(&Rows::new());
+        assert!(layout.hidden);
+        assert_eq!(pending.predict, 0);
+        assert_eq!(pending.text, b"help");
+        assert!(pending.clear_all && pending.clear_popup && pending.forget && pending.stop);
+        let queued = renderer.pending.lock().unwrap();
+        assert!(queued.stop);
+        assert!(queued.text.is_empty());
+        assert!(!queued.clear_all && !queued.clear_popup && !queued.forget);
+    }
+
+    #[test]
+    fn tiles_preserve_borders_and_place_cached_images_before_deleting_old_ones() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let layout = Layout { top: 1, cols: 2, rows: 2, ..Layout::default() };
+        let mut rows = Rows::new();
+        let mut out = Vec::new();
+        renderer.prepare_page((4, 4), &layout, &mut rows, &mut out);
+        let bgra: Vec<u8> = (0..16).flat_map(|i| [i, i + 1, i + 2, 255]).collect();
+        let mut pixels = Pixels {
+            #[cfg(target_os = "macos")]
+            surface: None,
+            base: bgra.as_ptr(), stride: 16, w: 4, h: 4,
+        };
+        let (parts, sent, moved) = renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[101, 102], &mut out);
+        assert_eq!((sent, moved, rows.bytes), (2, 0, 72));
+        assert_eq!(parts[0].inner, (0, 0, 4, 2));
+        assert_eq!(parts[1].inner, (0, 1, 4, 2));
+        assert_eq!(&parts[0].rgb[..3], &[2, 1, 0]);
+        assert_eq!(&parts[1].rgb[..3], &[6, 5, 4]);
+        let (unchanged, sent, moved) = renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[101, 102], &mut out);
+        assert!(unchanged.is_empty() && out.is_empty());
+        assert_eq!((sent, moved), (0, 0));
+        let (reused, sent, moved) = renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[102, 101], &mut out);
+        assert!(reused.is_empty());
+        assert_eq!((sent, moved), (0, 2));
+        assert_eq!(out, concat!(
+            "\x1b[2;1H\x1b_Ga=p,i=11,x=0,y=1,w=4,h=2,p=1,c=2,r=1,C=1,q=2\x1b\\",
+            "\x1b_Ga=d,d=i,i=10,p=1,q=2\x1b\\",
+            "\x1b[3;1H\x1b_Ga=p,i=10,x=0,y=0,w=4,h=2,p=2,c=2,r=1,C=1,q=2\x1b\\",
+            "\x1b_Ga=d,d=i,i=11,p=2,q=2\x1b\\",
+        ).as_bytes());
+    }
 
     #[test]
     fn shift_keeps_fixed_rows_and_blanks_new_ones() {

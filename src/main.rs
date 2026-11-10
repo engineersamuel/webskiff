@@ -8,6 +8,7 @@
 //! Timings go to stderr.
 
 use std::cell::Cell;
+#[cfg(target_os = "macos")]
 use std::ffi::c_void;
 use std::io::Write;
 use std::rc::Rc;
@@ -38,6 +39,7 @@ enum Mode {
     Scroll,
 }
 
+#[cfg(target_os = "macos")]
 #[link(name = "IOSurface", kind = "framework")]
 extern "C" {
     fn IOSurfaceLock(surface: *mut c_void, options: u32, seed: *mut u32) -> i32;
@@ -45,6 +47,7 @@ extern "C" {
     fn IOSurfaceGetBaseAddress(surface: *mut c_void) -> *mut c_void;
     fn IOSurfaceGetBytesPerRow(surface: *mut c_void) -> usize;
 }
+#[cfg(target_os = "macos")]
 const READ_ONLY: u32 = 1;
 
 /// The frame's BGRA pixels as tightly packed RGBA.
@@ -60,11 +63,14 @@ fn frame_rgba(frame: &Frame) -> Vec<u8> {
         }
     };
     match frame.buffer() {
+        #[cfg(target_os = "macos")]
         FrameBuffer::IoSurface(surface) => unsafe {
             IOSurfaceLock(surface, READ_ONLY, std::ptr::null_mut());
             copy(IOSurfaceGetBaseAddress(surface) as *const u8, IOSurfaceGetBytesPerRow(surface));
             IOSurfaceUnlock(surface, READ_ONLY, std::ptr::null_mut());
         },
+        #[cfg(not(target_os = "macos"))]
+        FrameBuffer::IoSurface(_) => panic!("IOSurface frames require macOS"),
         FrameBuffer::SharedMemory { pixels, stride, .. } => copy(pixels.as_ptr(), stride),
         FrameBuffer::Dmabuf { .. } => panic!("dmabuf frames are not handled"),
     }

@@ -1,0 +1,86 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      WEBSKIFF_BUILD_COMMIT: ${{ github.sha }}
+      EXPECTED_TARGET: ${{ matrix.target }}
+      CARGO_HTTP_USER_AGENT: OpenAI File Downloader, XaiImageApiFetch/1.0
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Python and uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          python-version: "3.13"
+          version: "0.11.21"
+          enable-cache: false
+      - name: Install Linux engine runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64 libatk-bridge2.0-0t64 \
+            libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 libgtk-3-0t64 \
+            libnss3 libxcomposite1 libxdamage1 libxkbcommon0 libxrandr2
+      - name: Check native toolchain and fetch the pinned engine
+        run: |
+          rustup show active-toolchain
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_TARGET"
+          engine="$(uv run --no-project python -I scripts/release.py fetch-engine --target "$EXPECTED_TARGET")"
+          echo "ZEBKIT_DIR=$engine" >> "$GITHUB_ENV"
+      - name: Check source and browser behavior
+        run: bash scripts/check.sh
+      - name: Build an internal test package
+        run: uv run --no-project python -I scripts/release.py package --target "$EXPECTED_TARGET"
+      - name: Test relocated package and its engine
+        run: |
+          version="$(uv run --no-project python -I scripts/release.py version)"
+          uv run --no-project python -I scripts/release.py verify \
+            "dist/webskiff-$version-$EXPECTED_TARGET.tar.gz" --selftest
+      - name: Test Homebrew installation in an isolated prefix
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: |
+          version="$(uv run --no-project python -I scripts/release.py version)"
+          uv run --no-project python -I scripts/release.py brew \
+            --repository "$GITHUB_REPOSITORY" --output dist/Formula/webskiff.rb --internal-test
+          brew ruby scripts/test-brew.rb "$PWD/dist/Formula/webskiff.rb" \
+            "$PWD/dist/webskiff-$version-$EXPECTED_TARGET.tar.gz"
+      - name: Upload internal packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: webskiff-${{ matrix.target }}-checks
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7

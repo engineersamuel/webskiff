@@ -1,2 +1,4 @@
 target/
 engine/
+dist/
+__pycache__/

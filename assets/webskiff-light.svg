@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="220" viewBox="0 0 600 220" role="img" aria-labelledby="title desc">
+  <title id="title">Webskiff</title>
+  <desc id="desc">A skiff in a tilted terminal window with a pink sail and wake.</desc>
+  <g transform="translate(18 14)" fill="none" stroke="#242424" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="rotate(-8 123 99)">
+      <rect x="43" y="43" width="159" height="107" rx="9"/>
+      <path d="m58 62 9 7-9 7m22 0h12"/>
+      <path fill="#b11f4b" stroke="none" d="M118 56v49H80z"/>
+      <path d="M121 54v58"/>
+      <path fill="#242424" stroke="none" d="M75 111h99l-22 22H94z"/>
+    </g>
+    <path stroke="#b11f4b" d="M28 144c26 0 30-17 57-17M48 160c28 0 30-17 58-17M133 158c24 0 31-10 55-10"/>
+  </g>
+  <text x="265" y="129" fill="#242424" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="61" font-weight="750" letter-spacing="-3">webskiff</text>
+</svg>

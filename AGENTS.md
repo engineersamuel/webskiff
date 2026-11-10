@@ -2,7 +2,7 @@
 
 ## Speed comes first
 
-Speed is the most important property of zweb. Never sacrifice speed.
+Speed is the most important property of Webskiff. Never sacrifice speed.
 
 - Target: every interaction under 10 ms, from key press to pixels written.
 - Do not accept a change that makes any interaction slower, or sends more bytes
@@ -14,9 +14,9 @@ Speed is the most important property of zweb. Never sacrifice speed.
 ## Measuring
 
 - `ZWEB_TRACE=1` logs the time of each stage to `~/.cache/zweb/zweb.log`.
-- Harnesses in `bench/` (run from that directory, with the zweb binary as the
+- Harnesses in `bench/` (run from that directory, with the webskiff binary as the
   first argument): `lat.py` (scroll latency), `inter.py` (page down/up,
   typing, hints, tab switch), `bench.py` (bytes per action), `scrollcpu.py`
   (CPU while scrolling), `idle.py` (bytes and CPU on an idle page).
-  Example: `python3 -I lat.py ../target/release/zweb https://en.wikipedia.org/wiki/Cat 30`
-- `zweb --selftest` must pass.
+  Example: `uv run --no-project python -I lat.py ../target/release/webskiff https://en.wikipedia.org/wiki/Cat 30`
+- `webskiff --selftest` must pass.

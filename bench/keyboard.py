@@ -1,0 +1,250 @@
+"""Exercise the browser's real keyboard dispatch and measure PTY output."""
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import pty
+import select
+import signal
+import struct
+import tempfile
+import termios
+import time
+
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("binary")
+parser.add_argument("--check", action="store_true")
+parser.add_argument("--config-check", action="store_true")
+parser.add_argument("--check-only", action="store_true")
+parser.add_argument("--enhanced-check", action="store_true")
+args = parser.parse_args()
+binary = str(Path(args.binary).resolve())
+fixture = Path(__file__).with_suffix(".html").resolve().as_uri()
+home = tempfile.TemporaryDirectory(prefix="webskiff-keyboard-")
+if args.config_check:
+    config = Path(home.name) / ".config/webskiff/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "[keys.browse]\nfind = ['z']\n"
+        "[keys.global]\nfind = ['Ctrl-S']\n"
+        "[keys.prompt]\nclear = ['Ctrl-Y']\n"
+    )
+pid, fd = pty.fork()
+if pid == 0:
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 1920, 1280))
+    os.environ["HOME"] = home.name
+    os.execv(binary, [binary, "--gfx", "kitty", fixture])
+original_flags = termios.tcgetattr(fd)[3]
+
+
+def pump(seconds):
+    output = []
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if select.select([fd], [], [], 0.002)[0]:
+            try:
+                data = os.read(fd, 1 << 20)
+            except OSError:
+                break
+            output.append((time.monotonic(), data))
+    return output
+
+
+samples = {}
+
+
+def press(keys, label=None, expected=None):
+    pump(0.05)
+    start = time.monotonic()
+    os.write(fd, keys)
+    output = pump(0.25)
+    raw = b"".join(data for _, data in output)
+    images = [at for at, data in output if b"a=T" in data or b"a=p" in data]
+    if label:
+        samples.setdefault(label, []).append({
+            "first_output_ms": (output[0][0] - start) * 1000 if output else None,
+            "first_pixels_ms": (images[0] - start) * 1000 if images else None,
+            "bytes": len(raw),
+        })
+    if expected is not None:
+        assert expected.encode() in raw, f"{keys!r}: expected {expected!r}, got {raw[-3000:]!r}"
+    return raw
+
+
+def percentile(values, fraction):
+    values = sorted(value for value in values if value is not None)
+    return values[min(int(len(values) * fraction), len(values) - 1)] if values else None
+
+
+try:
+    pump(0.5)
+    os.write(fd, b"\x1b_Gi=31;OK\x1b\\\x1b[?62;c")
+    if args.enhanced_check:
+        negotiation = b"".join(data for _, data in pump(0.25))
+        assert b"\x1b[?u" in negotiation, f"no enhanced-keyboard query: {negotiation!r}"
+        os.write(fd, b"\x1b[?1u\x1b[?62;c")
+    pump(4)
+    if args.enhanced_check:
+        raw_flags = termios.ICANON | termios.ECHO | termios.ISIG
+        assert termios.tcgetattr(fd)[3] & raw_flags == 0, "browser did not enter raw mode"
+        press(b"/", expected="FIND")
+        press(b"B", expected="m first:11:b")
+        for index, character in enumerate("rowser", 2):
+            press(character.encode(), expected=f"m browser:0:{'Browser'[:index]}")
+        raw = press(b"\x1b[99;5u", expected="m browser:0:Browser")
+        assert b"^[[99;5u" not in raw, "enhanced Ctrl-C was echoed"
+        for sequence in (b"\x1b[<35;1;59M", b"\x1b[<35;30;10M"):
+            raw = press(sequence)
+            assert sequence not in raw and b"^[[" not in raw, "mouse reports were echoed"
+        press(b"\r")
+        press(b"n", expected="m browser:8:Browser")
+        press(b"N", expected="m browser:0:Browser")
+        press(b"/")
+        press(b"\x1b[27u", expected="BROWSE")
+        assert termios.tcgetattr(fd)[3] & raw_flags == 0, "raw mode was lost during search"
+        press(b"\x1b[113;5u")
+        pump(2)
+        assert termios.tcgetattr(fd)[3] & raw_flags == original_flags & raw_flags, "terminal flags were not restored"
+        print("ENHANCED KEYBOARD AND TERMINAL RESTORATION CHECKS PASSED")
+        raise SystemExit(0)
+    if args.config_check:
+        assert b" FIND " not in press(b"/"), "disabled default still opens find"
+        press(b"z", expected="FIND")
+        press(b"alpha", expected="m first:0:alpha")
+        press(b"\r")
+        press(b"n", expected="m first:6:alpha")
+        press(b"\x13", expected="FIND")
+        press(b"\x1b")
+        press(b"\x0c", expected="OPEN")
+        press(b"word")
+        press(b"\x19", expected="Address or web search")
+        press(b"\x1b")
+        press(b"\x1bOP", expected="Ctrl-S")
+        press(b"G", expected="HELP MODE")
+        press(b"\x1b")
+        print("CONFIGURED KEYBOARD CHECKS PASSED")
+        raise SystemExit(0)
+    if args.check or args.check_only:
+        press(b"/")
+        press(b"alpha", expected="m first:0:alpha")
+        press(b"\r", expected="m first:0:alpha")
+        press(b"n", expected="m first:6:alpha")
+        press(b"n", expected="m first:15:alpha")
+        press(b"n", expected="m second:0:alpha")
+        press(b"n", expected="m first:0:alpha")
+        press(b"N", expected="m second:0:alpha")
+        press(b"n", expected="m first:0:alpha")
+        press(b"/")
+        press(b"alphabet", expected="m first:6:alphabet")
+        press(b"\x7f", expected="m first:6:alphabe")
+        press(b"\x1b")
+        press(b"\x06", expected="FIND")
+        press(b"alpha", expected="m first:6:alpha")
+        press(b"\r", expected="m first:15:alpha")
+        press(b"\x1b[13;2u", expected="m first:6:alpha")
+        press(b"\x1b", expected="m first:6:alpha")
+        press(b"n", expected="m first:15:alpha")
+        press(b"\x1bOR", expected="m second:0:alpha")
+        press(b"\x1b[13;2~", expected="m first:15:alpha")
+        press(b"\x06", expected="FIND")
+        press(b"beta", expected="m second:6:beta")
+        press(b"\x15", expected="Find in page")
+        press(b"never-found", expected="not found")
+        press(b"\x1b")
+        press(b"\x0c", expected="OPEN")
+        press(b"ac")
+        press(b"\x1b[D")
+        press(b"b", expected="ab")
+        press(b"\x1b[H")
+        press(b"\x1b[3~", expected="b")
+        press(b"\x1b[F")
+        press(b"d", expected="bcd")
+        press(b"\x15", expected="Address or web search")
+        press(b"one two")
+        press(b"\x17", expected="one ")
+        press(b"\x1b")
+        press(b"q", expected="Ctrl-Q")
+        press(b"?", expected="Webskiff keyboard help")
+        press(b"G", expected="HELP MODE")
+        press(b"g", expected="Webskiff keyboard help")
+        press(b"?", expected="BROWSE")
+        press(b"\x1bOP", expected="Webskiff keyboard help")
+        press(b"\x1b")
+        press(b"\x1b[15~", expected="keyboard fixture")
+        press(b"\t", expected="focus button")
+        press(b"\r", expected="button activated")
+        press(b"\t", expected="focus entry")
+        press(b"hello", expected="input:hello")
+        press(b"?", expected="input:hello?")
+        press(b"\x1bOP", expected="Webskiff keyboard help")
+        press(b"\x1b")
+        press(b"\x06", expected="FIND")
+        press(b"\x1b")
+        press(b"\x1b")
+        press(b"\x14", expected="NEW TAB")
+        press(fixture.encode() + b"\r", expected="2")
+        press(b"\x1b[9;6u", expected="\x1b[7m 1")
+        press(b"\x1b[9;5u", expected="\x1b[7m 2")
+        press(b"\x17", expected="keyboard fixture")
+        print("KEYBOARD CHECKS PASSED")
+        if args.check_only:
+            raise SystemExit(0)
+
+    # Measure without title-changing test instrumentation or leftover form values.
+    press(b"\x1b")
+    press(b"o")
+    press((fixture + "?measure").encode() + b"\r")
+    pump(1)
+    press(b"g")
+    press(b"g")
+    for _ in range(12):
+        press(b"j", "scroll down")
+        press(b"k", "scroll up")
+    for _ in range(6):
+        press(b"?", "help open")
+        press(b"\x1b", "help close")
+    press(b"g")
+    press(b"i")
+    for character in "hello world":
+        press(character.encode(), "page typing")
+    press(b"\x01")
+    press(b"\x7f")
+    press(b"\x1b")
+    press(b"t")
+    press((fixture + "?measure&tab=2").encode() + b"\r")
+    for _ in range(8):
+        press(b"K", "tab switch")
+    press(b"x")
+    for _ in range(8):
+        press(b"o", "open prompt")
+        press(b"example", "prompt typing")
+        press(b"\x1b")
+    for _ in range(8):
+        press(b"/")
+        for character in "alpha":
+            press(character.encode(), "find typing")
+        press(b"\r", "find enter")
+        press(b"n", "find next")
+        press(b"N", "find previous")
+    results = {}
+    for label, rows in samples.items():
+        results[label] = {
+            metric: {f"p{int(p * 100)}": percentile([row[metric] for row in rows], p)
+                     for p in (0.5, 0.9)}
+            for metric in rows[0]
+        }
+    print(json.dumps(results, indent=2))
+finally:
+    try:
+        if os.waitpid(pid, os.WNOHANG)[0] == 0:
+            os.write(fd, b"\x11")
+            pump(2)
+            if os.waitpid(pid, os.WNOHANG)[0] == 0:
+                os.kill(pid, signal.SIGTERM)
+                os.waitpid(pid, 0)
+    finally:
+        os.close(fd)
+        home.cleanup()

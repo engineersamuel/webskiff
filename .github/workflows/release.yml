@@ -1,0 +1,157 @@
+name: Prepare release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_HTTP_USER_AGENT: OpenAI File Downloader, XaiImageApiFetch/1.0
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          python-version: "3.13"
+          version: "0.11.21"
+          enable-cache: false
+      - name: Check version and legal prerequisites
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --no-project python -I scripts/release.py check-tag "$RELEASE_TAG"
+          uv run --no-project python -I scripts/release.py check-distribution
+
+  checks:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: checks
+    if: vars.PUBLIC_RELEASE_ENABLED == 'true'
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      WEBSKIFF_BUILD_COMMIT: ${{ github.sha }}
+      EXPECTED_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out the tested tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          python-version: "3.13"
+          version: "0.11.21"
+          enable-cache: false
+      - name: Download the tested package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: webskiff-${{ matrix.target }}-checks
+          path: checked
+      - name: Install Linux engine runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64 libatk-bridge2.0-0t64 \
+            libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 libgtk-3-0t64 \
+            libnss3 libxcomposite1 libxdamage1 libxkbcommon0 libxrandr2
+      - name: Restore tested binary and engine without rebuilding
+        run: |
+          version="$(uv run --no-project python -I scripts/release.py version)"
+          archive="checked/webskiff-$version-$EXPECTED_TARGET.tar.gz"
+          uv run --no-project python -I scripts/release.py verify "$archive"
+          mkdir -p target/release
+          tar -xzf "$archive" --strip-components=1 -C target/release
+      - name: Import signing credentials
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash scripts/signing-keychain.sh
+      - name: Sign, notarize and package
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: uv run --no-project python -I scripts/release.py package --target "$EXPECTED_TARGET" --release
+      - name: Test final package
+        run: |
+          version="$(uv run --no-project python -I scripts/release.py version)"
+          uv run --no-project python -I scripts/release.py verify \
+            "dist/webskiff-$version-$EXPECTED_TARGET.tar.gz" --selftest
+      - name: Upload release packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: webskiff-${{ matrix.target }}-release
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary signing keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          keychain="$RUNNER_TEMP/webskiff-release.keychain-db"
+          if test -f "$keychain"; then security delete-keychain "$keychain"; fi
+
+  draft:
+    needs: package
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    steps:
+      - name: Check out release notes
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          python-version: "3.13"
+          version: "0.11.21"
+          enable-cache: false
+      - name: Download verified release packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: webskiff-*-release
+          merge-multiple: true
+          path: dist
+      - name: Generate the exact-version Homebrew formula
+        run: |
+          uv run --no-project python -I scripts/release.py brew \
+            --repository "$GITHUB_REPOSITORY" --output dist/webskiff.rb
+      - name: Create a draft only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --no-project python -I scripts/release.py draft \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"

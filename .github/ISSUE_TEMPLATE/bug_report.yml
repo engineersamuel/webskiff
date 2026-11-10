@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible browser or terminal problem
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, cookies, profile files, private URLs, or unreviewed logs. Use private vulnerability reporting for security issues.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include webskiff --version, OS, terminal/multiplexer version, graphics mode, and scale.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a public URL or a minimal local HTML fixture.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include a redacted screenshot only if it helps.
+    validations:
+      required: true

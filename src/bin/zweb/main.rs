@@ -4,6 +4,9 @@
 //! zweb --selftest      checks input, hints, popups, dialogs and frame cost headless
 
 mod app;
+mod cli;
+mod config;
+mod input;
 mod keys;
 mod render;
 mod selftest;
@@ -91,24 +94,41 @@ fn query_graphics() -> (bool, bool) {
 }
 
 fn main() {
+    let command = cli::parse(std::env::args().skip(1)).unwrap_or_else(|error| {
+        eprintln!("webskiff: {error}\nRun webskiff --help for usage.");
+        std::process::exit(2);
+    });
+    let (address, requested_gfx, scale, placeholders) = match command {
+        cli::Command::Help => {
+            println!("{}", cli::HELP);
+            return;
+        }
+        cli::Command::Version => {
+            println!(
+                "webskiff {} (zebkit {}; {}; {}; {})",
+                env!("CARGO_PKG_VERSION"), zebkit::version(), zebkit::engine_version(),
+                env!("WEBSKIFF_BUILD_TARGET"), env!("WEBSKIFF_BUILD_COMMIT")
+            );
+            return;
+        }
+        cli::Command::Selftest => std::process::exit(selftest::run()),
+        cli::Command::Browse { address, gfx, scale, placeholders } => (address, gfx, scale, placeholders),
+    };
     trace::init();
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
-    if args.iter().any(|a| a == "--selftest") {
-        std::process::exit(selftest::run());
-    }
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("zweb [url] [--gfx kitty|shm|blocks] [--scale 1|2] [--placeholders]\nzweb --selftest\nIn the browser, ? shows the keys.");
-        return;
-    }
-    let url = args
-        .iter()
-        .enumerate()
-        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || !matches!(args[i - 1].as_str(), "--gfx" | "--scale")))
-        .map(|(_, a)| app::to_url(a))
-        .unwrap_or_else(|| app::home().into());
-    let scale = flag("--scale").and_then(|s| s.parse().ok());
-    let placeholders = args.iter().any(|a| a == "--placeholders");
+    let url = match address.as_deref().map(app::to_url).transpose() {
+        Ok(url) => url.unwrap_or_else(|| app::home().into()),
+        Err(error) => {
+            eprintln!("webskiff: cannot open file: {error}");
+            std::process::exit(1);
+        }
+    };
+    let config = match config::Config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("webskiff: {error}");
+            std::process::exit(1);
+        }
+    };
 
     let saved_stderr = redirect_stderr();
     terminal::enable_raw_mode().expect("raw mode");
@@ -117,14 +137,9 @@ fn main() {
         std::env::var("TERM_PROGRAM").as_deref(),
         Ok("herdr" | "ghostty" | "WezTerm")
     ) || std::env::var("KITTY_WINDOW_ID").is_ok();
-    let gfx = match flag("--gfx").as_deref() {
-        Some("blocks") => Gfx::Blocks,
-        Some("kitty") => Gfx::KittyDirect,
-        Some("shm") => Gfx::KittyShm,
-        _ if shm => Gfx::KittyShm,
-        _ if kitty || known_kitty => Gfx::KittyDirect,
-        _ => Gfx::Blocks,
-    };
+    let gfx = requested_gfx.unwrap_or({
+        if shm { Gfx::KittyShm } else if kitty || known_kitty { Gfx::KittyDirect } else { Gfx::Blocks }
+    });
     let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
     let mut out = std::io::stdout();
     execute!(out, terminal::EnterAlternateScreen, cursor::Hide, EnableMouseCapture, EnableBracketedPaste).unwrap();
@@ -168,7 +183,7 @@ fn main() {
     }
     let code = zebkit::run_with_args(engine_args, move || {
         APP.with(|a| {
-            let mut app = App::new(r, Options { scale, placeholders });
+            let mut app = App::new(r, Options { scale, placeholders }, config);
             app.relayout();
             app.open_tab(Some(&url), None);
             *a.borrow_mut() = Some(app);

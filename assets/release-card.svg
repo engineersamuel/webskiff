@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Webskiff - a keyboard-first Chromium browser for your terminal</title>
+  <desc id="desc">Window wake logo above the Webskiff name on a charcoal background.</desc>
+  <rect width="1200" height="630" fill="#292929"/>
+  <g transform="translate(444 46) scale(1.3)" fill="none" stroke="#dedede" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="rotate(-8 123 99)">
+      <rect x="43" y="43" width="159" height="107" rx="9"/>
+      <path d="m58 62 9 7-9 7m22 0h12"/>
+      <path fill="#fd8ea1" stroke="none" d="M118 56v49H80z"/>
+      <path d="M121 54v58"/>
+      <path fill="#dedede" stroke="none" d="M75 111h99l-22 22H94z"/>
+    </g>
+    <path stroke="#fd8ea1" d="M28 144c26 0 30-17 57-17M48 160c28 0 30-17 58-17M133 158c24 0 31-10 55-10"/>
+  </g>
+  <g fill="#dedede" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" text-anchor="middle">
+    <text x="600" y="375" font-size="88" font-weight="750" letter-spacing="-4">webskiff</text>
+    <text x="600" y="449" font-size="30">A keyboard-first Chromium browser for your terminal.</text>
+    <text x="600" y="543" font-size="23" fill="#fd8ea1">Vim keys. Familiar shortcuts. The real web.</text>
+  </g>
+</svg>

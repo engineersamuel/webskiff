@@ -1,6 +1,6 @@
-# zweb handoff
+# Webskiff handoff
 
-zweb is a web browser that runs inside a terminal. It uses zebkit (Chromium 157 packaged
+Webskiff is a web browser that runs inside a terminal. It uses zebkit (Chromium 157 packaged
 as a library) to draw pages off-screen. It sends the pixels to the terminal as
 Kitty graphics, and sends the terminal's keys and mouse to the page.
 This folder is a prototype and is separate from textward.
@@ -11,10 +11,21 @@ and no change may make anything slower without the user's approval.**
 ## Build, run, test
 
     ZEBKIT_DIR=$PWD/engine/zebkit-0.4.0-aarch64-apple-darwin cargo build --release
-    target/release/zweb [url-or-search] [--gfx kitty|shm|blocks] [--scale 1|2] [--placeholders]
-    target/release/zweb --selftest                       # must print ALL PASSED (15 checks)
-    ZEBKIT_DIR=... cargo test --release --bin zweb       # 2 unit tests (render.rs)
-    cd bench && python3 -I inter.py ../target/release/zweb   # latency per interaction
+    target/release/webskiff [url-or-search] [--gfx kitty|shm|blocks] [--scale 1|2] [--placeholders]
+    target/release/webskiff --selftest                       # must print ALL PASSED (15 checks)
+    ZEBKIT_DIR=... cargo test --release --bin webskiff       # address and render unit tests
+    uv run --no-project python -I bench/keyboard.py target/release/webskiff --check-only
+    uv run --no-project python -I bench/keyboard.py target/release/webskiff --config-check
+    uv run --no-project python -I bench/keyboard.py target/release/webskiff --enhanced-check
+    uv run --no-project python -I bench/keyboard.py target/release/webskiff
+    cd bench && uv run --no-project python -I inter.py ../target/release/webskiff
+
+- The Cargo package and default browser binary are named `webskiff`. The timing tool
+  remains `zebkit-probe`. Browser source paths, runtime labels, `ZWEB_*` switches,
+  logs, and profile paths retain their legacy `zweb` names.
+- Existing local files open from CLI arguments and the `o` / `t` prompts.
+  Relative paths use the working directory; spaces and URL characters are escaped.
+  Missing explicit paths report an error instead of being treated as hostnames.
 
 - Engine: the prebuilt zebkit v0.4.0 for macOS arm64, unpacked in `engine/` (git-ignored).
   The download is cached in `~/.cache/zebkit-dl`.
@@ -34,9 +45,27 @@ and no change may make anything slower without the user's approval.**
 | `render.rs` | Render thread: page split into tiles (cell row × ~16-col band) keyed by xxh3 hash, reuse via Kitty `a=p`, scroll prediction + "tape" of seen rows, progressive photo tiles, parallel zlib encode |
 | `hints.js` | hop.nvim-style hints drawn inside the page (dim overlay, code replaces a target's first characters); read ahead when the page is still |
 | `keys.rs` | crossterm key → DOM key events |
+| `config.rs` | Startup-only TOML configuration, modifier-aware per-mode bindings, and generated help |
+| `input.rs` | UTF-8 prompt cursor editing |
+| `find.js` | Native current-match live search, with a saved origin for query edits and cancellation |
 | `selftest.rs` | Headless checks of typing, paste, hints, `<select>` popups, `window.open`, dialogs |
 | `trace.rs` | `ZWEB_TRACE` timing |
 | `src/main.rs` | `zebkit-probe`, the original timing tool (text, png, kitty, scroll) |
+
+`bench/keyboard.py --check-only` drives the real browser in a PTY against a local page:
+live search, match navigation, prompt editing, page focus, standard shortcuts,
+safe quit, and the help overlay. `--config-check` tests remapped keys and help.
+Without flags it reports p50/p90 latency and bytes per action. Each run uses a
+temporary HOME; performance runs use the same page without the title-change
+listeners used by the assertions. Run both binaries without checks when comparing
+performance, so graphics image IDs start at the same value.
+
+Keyboard defaults are compiled from `config.example.toml`; user overrides load
+from `~/.config/webskiff/config.toml` once before terminal or engine startup.
+The config is not watched. Every app-owned shortcut, including prompt, hint, and
+help controls, is configurable. Website keyboard behavior is still handled by
+Chromium. Global quit takes priority in every mode; prompt editing takes priority
+over other global shortcuts (so Ctrl-W deletes a word in prompts).
 
 ## Where speed stands (simulated terminal, 120×40; p50 / p90)
 
@@ -52,6 +81,218 @@ and no change may make anything slower without the user's approval.**
 Key speed settings: `--disable-smooth-scrolling --disable-gpu-vsync --disable-gpu-compositing --hide-scrollbars`.
 `--disable-frame-rate-limit` was rejected: it used 240% CPU on idle pages with an animation.
 
+### Keyboard changes: validation and performance review (2026-11-10)
+
+Implemented live current-match find, modifier-aware standard shortcuts alongside
+Vim keys, editable prompts, page focus with Tab, safe bare `q`, and a scrollable
+terminal-text help overlay generated from the startup configuration. Defaults
+come from `config.example.toml`; a missing user config keeps the defaults, while
+invalid configuration stops startup before raw terminal mode.
+
+Functional checks pass: 12 Rust unit tests, real-PTY keyboard checks, real-PTY
+custom-config checks, and `webskiff --selftest` (`ALL PASSED`). New Rust modules
+pass rustfmt. Strict Clippy passes with two existing findings excluded:
+`int_plus_one` in `clip` and `items_after_test_module` in `app.rs`.
+Repository-wide formatting already differs from rustfmt; no broad formatting
+change was applied.
+
+Measured with `bench/keyboard.py`, fresh temporary profiles, a local static page,
+Kitty direct output, and a 120x40 PTY. Both binaries ran without assertion
+instrumentation. Latency is key to first page-image output, except prompt/help
+rows, which measure their terminal text. Byte counts include status updates.
+These are small, local samples, not a guarantee for all pages or terminals.
+
+| Action | Before p50/p90 (ms) | After p50/p90 (ms) | Bytes before p50/p90 | Bytes after p50/p90 |
+|---|---|---|---|---|
+| Scroll down | 0.20 / 0.27 | 0.22 / 0.30 | 9340 / 9340 | 9340 / 9340 |
+| Scroll up | 3.80 / 39.52 | 3.38 / 4.40 | 9022 / 9340 | 9022 / 9340 |
+| Open help (text) | 0.18 / 0.23 | 0.18 / 0.19 | 2204 / 2522 | 2425 / 2425 |
+| Close help | 2.91 / 4.43 | 3.02 / 3.34 | 113627 / 113815 | 113497 / 113627 |
+| Page typing | 3.21 / 3.91 | 2.31 / 5.89 | 2088 / 2558 | 2112 / 2558 |
+| Switch distinct tabs | 1.10 / 2.63 | 1.09 / 2.08 | 1548 / 1548 | 1548 / 1548 |
+| Open prompt (text) | 1.21 / 5.35 | 0.39 / 0.81 | 320 / 640 | 320 / 640 |
+| Type seven prompt characters (text) | 0.52 / 2.07 | 0.42 / 0.55 | 2240 / 2240 | 2240 / 2240 |
+| Type one find character | No page update | 2.87 / 6.63 | 320 / 320 | 1081 / 3556 |
+| Accept find (text) | 0.72 / 3.84 | 0.49 / 0.94 | 1308 / 3690 | 636 / 636 |
+| Next match | 3.34 / 5.24 | 4.11 / 86.87 | 1397 / 4032 | 1079 / 4032 |
+| Previous match | 3.14 / 4.38 | 3.82 / 5.92 | 1308 / 1397 | 1130 / 1397 |
+
+**Performance acceptance is pending.** Live find necessarily sends page updates
+that did not occur while typing before; current-match native selection is used
+instead of the more expensive all-match highlighting. Config-generated help
+also sends 221 more median bytes in this run. Earlier baseline runs also showed
+approximately 85 ms native-find frames, so the occasional long frame is not
+unique to this change. The under-10-ms target is not met for every interaction.
+The user was asked to approve the measured output cost but was unavailable;
+changes remain uncommitted for review.
+
+### Reported missing highlight and raw input (2026-11-10)
+
+The reported screenshot showed `CMD`, not the new `FIND` label. The running
+process was `target/release/zweb`, dated November 9; the updated executable was
+`target/release/webskiff`, dated November 10. The live-find regression check fails
+against that old `zweb` binary and passes against `webskiff`. Cargo leaves the
+old executable behind when a binary is renamed; restart using `webskiff`.
+
+An additional PTY test negotiates enhanced keyboard input, types `Browser` one
+character at a time, verifies selected text and next/previous positions, sends
+enhanced Ctrl-C/Escape and the screenshot's mouse-report sequences, and checks
+raw-mode flags and their restoration at exit. It passes against `webskiff`;
+raw-code echo was not reproduced in that build. The user's running process
+was not stopped or replaced. No app input or rendering code changed for this
+investigation.
+
+## Video playback investigation (2026-11-10)
+
+The user reported choppy YouTube video. `bench/video.py` reproduces choppy
+playback without network access: ffmpeg generates a 960x540 VP8 video, then
+the actual browser plays it in a 120x40 PTY (1920x1280 terminal pixels).
+Shared-memory mode uses the existing automatic scale 2. A simulated terminal
+reads and unlinks each shared-memory transfer. The harness asserts playback
+starts, then optionally checks delivery rate, p90 cadence, and reported
+video drops. It measures the browser's output, not Herdr's display.
+
+The red-capable command was run and failed against the current executable:
+
+```sh
+uv run --no-project python -I bench/video.py target/release/webskiff --check
+```
+
+It delivered 14.73 fps from a 30 fps source, with 121 reported drops in the
+sample and 80.15/85.88 ms frame gaps (p50/p90). Encoding took only
+1.61/1.95 ms. Ranked hypotheses were the 240 fps capture setting, disabled GPU
+compositing, then transfer cost. Tests at capture rates of 30 and 60 still
+delivered about 14-15 fps. Disabling background throttling also failed.
+Direct Kitty transport still dropped frames (17.61 fps, 99 reported drops).
+
+Adding Chromium's `--disable-frame-rate-limit` through the existing `ZWEB_ARGS`
+resolved the local delivery fault without changing the executable:
+
+| Source / transport | Delivered fps, before / after | Frame gap p50/p90 ms, before / after | Encode p50/p90 ms, before / after | Terminal KiB/s, before / after |
+|---|---|---|---|---|
+| 30 fps / shm | 14.73 / 29.99 | 80.15/85.88 / 33.26/34.32 | 1.61/1.95 / 1.51/1.70 | 422.06 / 862.84 |
+| 60 fps / shm | 23.73 / 60.00 | 57.69/77.43 / 16.77/17.62 | 1.54/1.91 / 1.53/1.78 | 732.09 / 1831.33 |
+| 30 fps / direct | 17.61 / 29.99 | 63.88/83.97 / 33.19/34.24 | 3.21/3.99 / 1.92/2.20 | 2461.82 / 4179.39 |
+
+All three option-enabled cases passed the delivery/drop checks. A repeat of
+30 fps shm delivered 29.97 fps with 33.25/34.19 ms gaps and no reported drops.
+The 60 fps run also reported zero drops, though its JS video-frame callbacks
+did not run once per delivered frame; those counters are reported separately.
+Total video-frame counts include dropped frames and are not decode counts.
+
+The flag increases output by delivering frames previously missed. Shared
+pixels rose from 51.18 to 103.12 MiB/s at 30 fps, and 85.97 to 213.95 MiB/s
+at 60 fps. It affects all animations, not just video. Approval to enable it
+by default was requested, but the user was unavailable. **No runtime defaults,
+capture rates, GPU switches, rendering code, user config, or running browser
+were changed.** The README documents an opt-in launch command.
+
+Keyboard comparisons with/without this option used `bench/keyboard.py`:
+
+| Action | Before p50/p90 ms | Option p50/p90 ms |
+|---|---|---|
+| Scroll down | 0.22/0.28 | 0.27/0.31 |
+| Scroll up | 3.64/17.05 | 3.78/4.20 |
+| Open help (text) | 0.19/0.26 | 0.23/0.26 |
+| Close help | 3.17/3.43 | 3.06/3.87 |
+| Page typing | 4.58/6.68 | 3.98/6.08 |
+| Tab switch | 0.86/1.41 | 1.34/3.56 |
+| Open prompt (text) | 0.62/0.68 | 0.69/1.28 |
+| Prompt typing (text) | 0.66/1.22 | 0.67/3.08 |
+| Find typing | 4.17/5.80 | 3.28/5.34 |
+| Accept find (text) | 0.70/0.91 | 0.67/1.13 |
+| Next match | 3.82/6.71 | 4.94/8.32 |
+| Previous match | 4.26/90.21 | 2.88/4.56 |
+
+Small samples show both increases and decreases, not proof of no regression.
+Most per-action byte counts were unchanged; video output clearly increased.
+Raw keyboard results are in the session's `files/video-keyboard-before.json`
+and `files/video-keyboard-after.json`. The sub-10-ms target is not claimed.
+
+**Still needs an actual Herdr/YouTube check:** terminal image decoding/upload,
+display cadence, buffering, audio/video sync, and sustained playback under
+real page load. Local video delivery is fixed by the opt-in flag; the user's
+full YouTube symptom is not yet verified.
+
+Final validation passed: video delivery/cadence/drop assertions at 30 and
+60 fps over shm, 30 fps over direct Kitty, the keyboard behavior checks with
+the option enabled, Python syntax, and `git diff --check`. The engine self-test
+printed `ALL PASSED`. It also logged macOS `CVDisplayLinkCreateWithCGDisplay`
+errors (`CVReturn: -6670`); the relation of these display-clock warnings to
+the limiter fault is not established. No Rust runtime code changed, so no
+rebuild was needed.
+
+## Release preparation: 0.1.0-beta.1
+
+Implemented the selected Window wake identity, branded README, SVG logo variants,
+1200x630 social PNG, real local-fixture terminal recording, and unpublished X and
+internal announcement drafts. Usage, performance, security, contribution,
+third-party notice, and release guides describe the preview limits explicitly.
+
+Added validated CLI help/version, Cargo-sourced version/tag checks, exact engine
+archive hashes, dependency inventories, relocatable internal packages, signing/
+notarization preparation, native macOS ARM64 and experimental Linux x86-64 CI,
+and protected draft-only releases. Public packaging fails without a selected
+project license and reviewed third-party notices. These file checks are not legal
+clearance. The selected source remote is the private
+`https://github.com/engineersamuel/webskiff.git`. There is no hosted CI result,
+public release, or published tap.
+
+The generated Homebrew formula keeps the binary and engine under libexec.
+A plain bin symlink failed real engine startup; the standard exec wrapper passed.
+`scripts/test-brew.rb` runs the actual formula install method in a disposable
+prefix, then checks version and engine startup through that installed wrapper.
+This is not a full tap download, brew sandbox, upgrade, or uninstall test.
+
+A security review found one medium-severity terminal-control injection through
+page dialog strings. Display clipping now replaces control characters. The
+regression was observed failing with sanitization disabled and passing after
+restoration. Upstream sandbox, local-file origin isolation, and clipboard
+activation guarantees remain unverified; they were not confirmed vulnerabilities.
+
+Local checks passed: 15 Rust tests, all-target Clippy (the existing
+`items_after_test_module` exception only), release build, 11 release-tool tests,
+three keyboard/terminal-restoration checks, relocated packaged engine self-test,
+and isolated Homebrew formula installation/self-test. Workflow syntax, shell
+lint, brand asset validation, local documentation links, and recording privacy
+checks passed. The recording contains 496 output events over 18.6 seconds.
+Linux all-target source type-checking passed with an isolated target standard
+library; no native Linux link or runtime result is available.
+
+The final before/after/repeat p50/p90 timing and byte tables are in
+`docs/performance.md`. One previous-match run reached 85.72 ms p90, versus
+4.63 ms before and 5.44 ms on repeat. Some timings/output counts increased.
+Small samples do not prove a regression or prove its absence. Performance/output
+approval remains open. No sub-10-ms or smooth-YouTube release claim is justified.
+
+Still required before publication: ownership/license approval, reviewed engine
+notices, chosen application and tap repositories, protected GitHub release
+environment and signing/notarization secrets, successful native hosted CI,
+quarantined fresh-Mac installation, full Homebrew lifecycle tests, and actual
+terminal/video/accessibility/company-policy acceptance. Store signing secrets
+only in GitHub environment settings, not this repository or chat.
+No push, tag publication, release publication, or announcement was made.
+
+### Renderer complexity gate
+
+Split all six flagged functions into private helpers without changing pixel
+averaging, tape rules, queue ordering, prediction thresholds, tile/cache state,
+or graphics messages. `cccc` passes limits of 15 across the entire renderer,
+including the helpers: maximum cyclomatic 9 and cognitive 12.
+Seven focused tests bring the Rust total to 22; the project checks, three
+keyboard checks, Clippy, release-tool tests, and engine self-test passed.
+Full before/after/repeat p50/p90 and byte measurements are in
+`docs/performance.md`. Small-sample timing/output variation remains an open
+release-acceptance item, including one 84.05 ms previous-match p90.
+
+The user authorized committing/pushing to `engineersamuel/webskiff` and repository
+setup. Authentication blocks remote work: the stored personal GH profile's API
+requests identify as the work account, SSH cannot access the private repository,
+and existing HTTPS credentials fail without a password prompt. The original
+work-account selection was restored. Re-authenticate through `gh auth login`
+as `engineersamuel` with `repo,workflow` scopes; never send a token in chat.
+Repository visibility and release settings have not been changed.
+
 ## Open items / not verified
 
 - **Not seen in herdr** (checked only by rebuilding the screen from zweb's output):
@@ -60,7 +301,9 @@ Key speed settings: `--disable-smooth-scrolling --disable-gpu-vsync --disable-gp
 - **hop hints:** a wide code letter hides the whole letter it touches, so a small gap can show. Codes for icons sit at the icon's corner. `f` is above 10 ms.
 - **Page down into content Chrome has not drawn** is above 10 ms. The only fix found (a taller hidden page) breaks fixed footers.
 - **Pages that focus a text box on load** (e.g. Google) capture keys: press Esc first. This matches Vimium.
-- **Not built:** downloads, bookmarks, a history list, file upload, dark-mode signal to pages, Linux.
+- **Not built:** downloads, bookmarks, a history list, file upload, dark-mode signal to pages.
+- **Linux:** source type-checks and an experimental native CI runner are prepared;
+  native linking and runtime remain unverified.
 - **zebkit bug:** `View::new_offscreen(Some(url))` fails the load at once, so zweb creates the view empty and then loads the URL. That empty first page is in history; zweb skips back over it.
 - **Choices made without asking:** `~/projects/prototypes/zebkit-probe-decisions.html` (red items need the user's confirmation).
 
