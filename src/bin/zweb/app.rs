@@ -39,6 +39,8 @@ pub enum Msg {
     Found { found: bool },
     Focused { ok: bool },
     Extents { tab: u64, json: Option<String> },
+    /// Read the page for hints ahead, if nothing happened since `gen`.
+    Prepare { gen: u64 },
     Tick,
 }
 
@@ -103,9 +105,6 @@ struct Hint {
     key: String,
     x: f32,
     y: f32,
-    /// Top-left corner, where the label goes.
-    l: f32,
-    t: f32,
     href: Option<String>,
     edit: bool,
 }
@@ -149,6 +148,8 @@ pub struct App {
     /// The active page's scrollY, innerHeight and scrollHeight, as last
     /// read and moved by predicted scrolls since.
     extents: Option<(f32, f32, f32)>,
+    /// Bumped by every action; a hint read ahead waits for 200 ms of none.
+    prep_gen: u64,
     opts: Options,
     renderer: Arc<Renderer>,
     last_click: (Instant, f32, f32, u32),
@@ -176,6 +177,7 @@ impl App {
             scale: 1,
             row_css: 16.0,
             extents: None,
+            prep_gen: 0,
             opts,
             renderer,
             last_click: (Instant::now() - Duration::from_secs(10), 0.0, 0.0, 0),
@@ -192,7 +194,6 @@ impl App {
         let px = terminal::window_size().ok();
         let page_rows = rows.saturating_sub(2).max(1);
         let (mut cell_w, mut cell_h) = (8.0, 16.0);
-        let known = px.as_ref().is_some_and(|p| p.width > 0 && p.height > 0);
         if let Some(px) = px.filter(|p| p.width > 0 && p.height > 0) {
             cell_w = px.width as f64 / cols as f64;
             cell_h = px.height as f64 / rows as f64;
@@ -206,8 +207,7 @@ impl App {
         self.scale = self.opts.scale.unwrap_or(if self.renderer.gfx == crate::render::Gfx::KittyShm { dpr as u32 } else { 1 });
         {
             let mut l = self.renderer.layout.lock().unwrap();
-            let cell_px = if known { (cell_w.round() as u16, cell_h.round() as u16) } else { (0, 0) };
-            *l = Layout { top: 1, cols, rows: page_rows, css_w, css_h, hidden: self.help, popup: l.popup, cell_px };
+            *l = Layout { top: 1, cols, rows: page_rows, css_w, css_h, hidden: self.help, popup: l.popup };
         }
         for t in &self.tabs {
             t.view.set_size(css_w, css_h, self.scale as f32);
@@ -302,6 +302,7 @@ impl App {
         tab.view.request_frame();
         self.extents = None;
         self.query_extents();
+        self.schedule_prepare();
         self.draw();
     }
 
@@ -369,6 +370,7 @@ impl App {
                             t.loading = false;
                             if i == self.active {
                                 self.query_extents();
+                                self.schedule_prepare();
                             }
                         }
                         LoadEvent::Failed => {
@@ -457,8 +459,6 @@ impl App {
                         key: h["k"].as_str().unwrap_or("").into(),
                         x: h["x"].as_f64().unwrap_or(0.0) as f32,
                         y: h["y"].as_f64().unwrap_or(0.0) as f32,
-                        l: h["l"].as_f64().unwrap_or(0.0) as f32,
-                        t: h["t"].as_f64().unwrap_or(0.0) as f32,
                         href: h["href"].as_str().map(Into::into),
                         edit: h["edit"].as_bool().unwrap_or(false),
                     })
@@ -467,12 +467,17 @@ impl App {
                     self.mode = Mode::Browse;
                     self.message = "no links here".into();
                 }
-                self.show_hints("");
                 self.draw();
             }
             Msg::Found { found } => {
                 self.message = if found { format!("/{}", self.find) } else { format!("not found: {}", self.find) };
                 self.draw();
+            }
+            Msg::Prepare { gen } => {
+                if gen == self.prep_gen && self.mode == Mode::Browse && !self.tabs.is_empty() {
+                    let lib = HINTS_JS.split("\nJSON.stringify").next().unwrap_or("");
+                    self.view().evaluate(&format!("{lib};__zwebHopPrepare()"), |_| {});
+                }
             }
             Msg::Extents { tab, json } => {
                 if self.index_of(tab) == Some(self.active) {
@@ -640,6 +645,7 @@ impl App {
         self.view().send_wheel(x, y, dx, dy, false, WheelPhase::None, mods);
         crate::trace!("wheel sent {dy} at {}", crate::trace::ticks_us());
         self.query_extents();
+        self.schedule_prepare();
     }
 
     fn predict(&mut self, dy: f32) {
@@ -657,6 +663,12 @@ impl App {
             self.renderer.predict(k);
             self.extents = Some((sy + dy, ih, sh));
         }
+    }
+
+    fn schedule_prepare(&mut self) {
+        self.prep_gen += 1;
+        let gen = self.prep_gen;
+        zebkit::after(Duration::from_millis(200), move || send(Msg::Prepare { gen }));
     }
 
     fn query_extents(&self) {
@@ -694,29 +706,18 @@ impl App {
     }
 
     fn clear_hints(&mut self) {
-        let had = !self.hints.is_empty();
         self.hints.clear();
         self.hint_typed.clear();
-        if had {
-            self.renderer.hints(Vec::new());
-            if let Some(t) = self.tabs.get(self.active) {
-                // Blocks mode wrote the labels into page cells.
-                t.view.request_frame();
-            }
+        if let Some(t) = self.tabs.get(self.active) {
+            t.view.evaluate("window.__zwebHop && __zwebHop.clear()", |_| {});
         }
+        self.schedule_prepare();
     }
 
-    /// Labels of the hints that start with `typed`, at their elements' cells.
+    /// Keeps the codes that start with `typed`, showing what is left of them.
     fn show_hints(&self, typed: &str) {
-        let l = self.layout();
-        let k = l.px_per_css();
-        let labels = self
-            .hints
-            .iter()
-            .filter(|h| h.key.starts_with(typed))
-            .map(|h| ((h.l * k) as u32, (h.t * k) as u32, h.key[typed.len()..].to_string()))
-            .collect();
-        self.renderer.hints(labels);
+        let js = format!("window.__zwebHop && __zwebHop.show({})", serde_json::to_string(typed).unwrap());
+        self.view().evaluate(&js, |_| {});
     }
 
     fn hint_key(&mut self, k: KeyEvent) {

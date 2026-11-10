@@ -97,18 +97,21 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                         .and_then(|j| serde_json::from_str(&j).ok())
                         .unwrap_or_default();
                     println!("      hints: {}", list.iter().map(|h| h["k"].as_str().unwrap_or("?")).collect::<Vec<_>>().join(" "));
-                    let rendered = list.iter().all(|h| h["l"].is_number() && h["t"].is_number());
+                    let rendered = list.iter().all(|h| h["k"].is_string());
                     if let Some(h) = list.iter().find(|h| (h["y"].as_f64().unwrap_or(0.0) - 75.0).abs() < 10.0) {
                         click(&page, h["x"].as_f64().unwrap() as f32, h["y"].as_f64().unwrap() as f32);
                     }
                     page.evaluate(&format!("window.hintCount={}", if rendered { list.len() } else { 0 }), |_| {});
                 });
             }),
-            Check::Js("[window.hintCount, b.textContent].join()", "\"4,clicked\""),
+            Check::Js("[window.hintCount, b.textContent, !!window.__zwebHop].join()", "\"4,clicked,true\""),
         ),
         (
             "select opens a popup layer",
-            Box::new(|_, v| click(v, 60.0, 125.0)),
+            Box::new(|_, v| {
+                v.evaluate("__zwebHop.clear()", |_| {});
+                click(v, 60.0, 125.0)
+            }),
             Check::Flag(|c| c.popup.get()),
         ),
         (
