@@ -286,12 +286,19 @@ Full before/after/repeat p50/p90 and byte measurements are in
 release-acceptance item, including one 84.05 ms previous-match p90.
 
 The user authorized committing/pushing to `engineersamuel/webskiff` and repository
-setup. Authentication blocks remote work: the stored personal GH profile's API
-requests identify as the work account, SSH cannot access the private repository,
-and existing HTTPS credentials fail without a password prompt. The original
-work-account selection was restored. Re-authenticate through `gh auth login`
-as `engineersamuel` with `repo,workflow` scopes; never send a token in chat.
-Repository visibility and release settings have not been changed.
+setup, then restored personal-account authentication. Source commit `81c6fd6` is
+ready for upload. Origin uses HTTPS with a repository-local GH credential helper;
+no token is stored in this repository. The repository remains private.
+Merge commits are disabled and rebase merging is enabled. Actions require pinned
+SHAs, allow GitHub-owned actions plus `astral-sh/setup-uv`, and default to read-only
+workflow tokens without automated review approval.
+
+Public release jobs are explicitly disabled by `PUBLIC_RELEASE_ENABLED=false`.
+The current GitHub plan rejects private-repository rulesets and required release
+reviewers. A failed environment-protection request left an unprotected environment;
+it was removed immediately. No unprotected release environment remains.
+Do not upgrade billing or make the repository public without separate approval.
+Native hosted CI and repository-source upload are the next verification steps.
 
 ## Open items / not verified
 

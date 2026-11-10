@@ -6,9 +6,14 @@ A successful build is not permission to claim production readiness.
 ## Current gates
 
 The source remote is `https://github.com/engineersamuel/webskiff.git` (private).
-GitHub access currently needs personal-account authentication repair: the stored
-personal profile's API requests identify as the work account, and neither SSH
-nor existing HTTPS Git credentials can access this repository.
+Personal-account GitHub access is restored. Repository-local HTTPS Git
+authentication uses the GitHub CLI credential helper, not a stored token file.
+`PUBLIC_RELEASE_ENABLED=false` keeps public release jobs disabled.
+The current GitHub plan rejects private-repository rulesets and required release
+reviewers. A protected release environment could not be configured; the partial
+unprotected environment was removed. Upgrade eligibility or separately approve
+public repository visibility before configuring these protections. Do not enable
+release jobs without them.
 This checkout has no selected project license, complete engine license bundle,
 or Apple signing credentials. No hosted runner or fresh-machine installation
 has been verified here.
@@ -20,9 +25,9 @@ Before public distribution:
 1. Obtain and review Zebkit/Chromium and Rust dependency notices. Put the required
    texts and notices under `packaging/third-party/`. Verify LGPL obligations with
    the engine supplier. `dependencies.json` is an inventory, not legal clearance.
-1. Authenticate as `engineersamuel`, push the reviewed source to the application
-   repository, and choose a `homebrew-tap` repository. The application repository
-   already exists; do not make it public without separate approval.
+1. Push the reviewed source to the application repository and choose a
+   `homebrew-tap` repository. The application repository already exists;
+   do not make it public without separate approval.
 1. Review and include all intended source files. A clean checkout must build.
    Do not commit engine binaries, profiles, credentials, or build outputs.
 1. Run CI on macOS ARM64 and experimental Linux x86-64. Fix failures before
