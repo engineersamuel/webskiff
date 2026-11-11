@@ -69,6 +69,17 @@ jobs:
           token: ${{ steps.app.outputs.token }}
           target-branch: ${{ github.ref_name }}
           skip-github-release: ${{ inputs.verify-only }}
+      - name: Merge the release PR after its required checks pass
+        if: ${{ !inputs.verify-only && steps.please.outputs.release_created != 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&base=$GITHUB_REF_NAME" \
+            -H "User-Agent: $CARGO_HTTP_USER_AGENT" \
+            --jq '.[] | select(any(.labels[]; .name == "autorelease: pending")) | .number' |
+          while read -r number; do
+            gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --auto --squash
+          done
       - name: Resolve the exact source to test
         id: candidate
         env:
@@ -87,7 +98,7 @@ jobs:
             commit="$RELEASE_COMMIT"
           else
             if [ "$PR_CREATED" = true ]; then
-              echo 'Release PR prepared; publication waits for its manual merge.'
+              echo 'Release PR prepared; it merges when its required checks pass.'
             else
               echo 'No releasable commits; no PR or release was created.'
             fi

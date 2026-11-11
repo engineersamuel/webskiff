@@ -82,8 +82,10 @@ metadata.
 
 After the automation PR is merged, successful native checks on `main` call
 `source-release.yml`. Release Please opens or updates a release PR with the Cargo
-version, lockfile, release manifest, and changelog changes. You review and merge
-that PR yourself; the bot never merges an application PR.
+version, lockfile, release manifest, and changelog changes. The App then turns
+on squash auto-merge for that PR, so it merges when the required native checks
+pass. It merges no other PR. To hold a release, turn off auto-merge on the
+release PR; the next `main` run turns it on again.
 
 Use Conventional Commit **messages**, not only PR titles: rebase merging preserves
 individual messages. `fix: ...` means a patch, `feat: ...` means a feature, and
@@ -92,7 +94,7 @@ Before 1.0, incompatible changes bump the minor version. The configured
 prerelease strategy keeps releases on the `beta` channel. Stable releases need
 an explicit configuration change after acceptance.
 
-After you merge the release PR:
+After the release PR merges:
 
 1. Both supported native targets build and pass their browser/engine checks.
 1. The App creates a **draft source-only GitHub preview**.
