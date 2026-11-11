@@ -17,26 +17,44 @@ Homebrew builds Webskiff from source; there is no prebuilt Webskiff release. Do 
 for sensitive accounts or treat it as an approved company browser.
 Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/webskiff).
 
-[Get started](#get-started) · [Keyboard guide](#keyboard-guide) ·
+[Get started](#get-started) · [Watch Webskiff](#watch-webskiff) · [Keyboard guide](#keyboard-guide) ·
 [Configuration](#configuration) · [Support](#support) ·
 [Build and test](https://github.com/engineersamuel/webskiff/actions/workflows/ci.yml) ·
 [Release process](docs/releasing.md)
 
-## See the controls
-
-[Download a real terminal recording](assets/demo.cast.gz) of scrolling, live
-search, match navigation, tabs, hints, and help on a local fixture.
-It contains Kitty graphics: replay with asciinema in a compatible 120x40 terminal,
-not a text-only web player. See [recording instructions](docs/releasing.md#demo-and-announcements).
-
 ## Get started
 
-### Homebrew: macOS on Apple Silicon
+Requires **macOS 13+ on Apple Silicon**. Intel Macs and Linux are not supported
+by the Homebrew formula.
+For full-page graphics, use a terminal that supports the Kitty graphics
+protocol, such as [Kitty](https://sw.kovidgoyal.net/kitty/).
+
+### First install
+
+Add the project tap explicitly, then install Webskiff:
 
 ```sh
+brew tap engineersamuel/tap
 brew install engineersamuel/tap/webskiff
-webskiff https://example.com
+webskiff --version
 ```
+
+Open a page:
+
+```sh
+webskiff https://www.google.com
+```
+
+### Upgrade an existing installation
+
+```sh
+brew update
+brew upgrade engineersamuel/tap/webskiff
+webskiff --version
+```
+
+`brew update` refreshes tap metadata; `brew upgrade` updates an installed
+Webskiff. On a new Mac, use the **First install** steps instead.
 
 The [project tap](https://github.com/engineersamuel/homebrew-tap) builds the Rust
 browser locally and installs its checksum-pinned Zebkit/Chromium engine.
@@ -44,11 +62,33 @@ Homebrew installs Rust as a build dependency. The engine is prebuilt upstream;
 this is not a source build of Chromium. No paid Apple Developer membership or
 Webskiff signing certificate is needed.
 
-The full command above adds the tap automatically. After `brew tap engineersamuel/tap`,
-`brew install webskiff` also works. This formula is not in Homebrew's main repository.
-The tap currently supports **Apple Silicon Macs only**, not Intel Macs or Linux.
+This formula is not in Homebrew's main repository.
 
-### Build from this checkout
+## Watch Webskiff
+
+This real terminal recording opens Google, searches for `webskiff zebkit`,
+then uses `Esc`, `f`, and hint `e` to open Zebkit's GitHub page.
+Search results and hint letters can change.
+
+<details>
+<summary>Show the Google search and keyboard-hint GIF (23 seconds)</summary>
+
+![Webskiff opening Google, searching for webskiff zebkit, showing link hints, and opening Zebkit on GitHub](assets/google-search.gif)
+
+Close this section to hide the animation. The final frame is held briefly.
+
+</details>
+
+[Download the original Google terminal recording](assets/google-search.cast.gz)
+for replay at 100x32 cells.
+
+[A separate local-fixture recording](assets/demo.cast.gz) shows scrolling, live
+search, match navigation, tabs, hints, and help.
+Replay it at 120x40 cells. Both recordings contain Kitty graphics: use asciinema
+in a compatible terminal, not a text-only web player.
+See [replay instructions](docs/releasing.md#demo-and-announcements).
+
+## Build from this checkout
 
 The locally tested build is **macOS 13+ on Apple Silicon**. Install Rust using
 the version in `rust-toolchain.toml`, plus [uv](https://docs.astral.sh/uv/),
@@ -78,8 +118,6 @@ Local files are rendered according to their content; Markdown is not converted
 to HTML. Use an HTML file for a local web page.
 
 Maintainers: see [source-tap updates and optional signed binary releases](docs/releasing.md).
-
-For updates, run `brew update`, then `brew upgrade engineersamuel/tap/webskiff`.
 
 ## Keyboard guide
 

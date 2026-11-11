@@ -391,7 +391,7 @@ Kitty graphics, so replay it with asciinema in a compatible terminal at 120x40
 cells. Web players and text-only GIF converters do not reproduce the page
 images. This is a raw output recording, not an edited launch video.
 
-With asciinema already installed, replay the checked-in recording (Fish):
+With asciinema already installed, replay the local-fixture recording (Fish):
 
 ```fish
 set demo (mktemp -t webskiff-demo)
@@ -399,6 +399,13 @@ gzip -dc assets/demo.cast.gz > "$demo"
 asciinema play "$demo"
 rm "$demo"
 ```
+
+For the README's Google demo, use `assets/google-search.cast.gz` instead and a
+100x32 terminal. It records launching Webskiff, opening Google, searching for
+`webskiff zebkit`, and pressing `Esc`, `f`, then `e` to open the Zebkit result.
+The capture used a fresh profile and real terminal input. The GIF was decoded
+from the actual terminal output, including Kitty graphics. Its final frame is
+held briefly; the original asciicast retains the full capture timing.
 
 Record a real 20-30 second terminal session on public/local pages showing open,
 scroll, `/` search, Enter then `n`/`N`, hints, tabs, and `?` help. Use a fresh
