@@ -21,7 +21,7 @@ use crate::input::{self, Edit, TextInput};
 use crate::render::{Layout, Renderer};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
-const FIND_JS: &str = include_str!("find.js");
+pub const FIND_JS: &str = include_str!("find.js");
 const EDITABLE_JS: &str = "(e=>!!e&&(e.isContentEditable||e.tagName==='TEXTAREA'||(e.tagName==='INPUT'&&\
     !/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(e.type))))(document.activeElement)";
 const HOME: &str = "https://duckduckgo.com/";
@@ -762,7 +762,10 @@ impl App {
             Action::FocusNext => KeyCode::Tab,
             Action::FocusPrevious => KeyCode::BackTab,
             Action::Activate => KeyCode::Enter,
-            Action::PageEscape => KeyCode::Esc,
+            Action::PageEscape => {
+                self.view().evaluate("window.__zwebSearch?.mark('')", |_| {});
+                KeyCode::Esc
+            }
             _ => return,
         };
         self.forward(&KeyEvent::new(code, KeyModifiers::NONE));
@@ -854,7 +857,9 @@ impl App {
                 self.bindings.labels(Scope::Global, Action::Find));
             return;
         }
-        let script = format!("window.find({}, false, {back}, true)", serde_json::to_string(&self.find).unwrap());
+        // The page may have changed since the prompt: define the helpers again.
+        let lib = FIND_JS.split("\n// SEARCH SESSION").next().unwrap_or("");
+        let script = format!("{lib};__zwebSearch.step({}, {back})", serde_json::to_string(&self.find).unwrap());
         self.run_find(&script, self.find.clone());
     }
 
@@ -1214,7 +1219,7 @@ impl App {
         if !accept {
             self.find_generation += 1;
         }
-        let script = format!("window.__zwebFind?.finish({accept})");
+        let script = format!("window.__zwebFind?.finish({accept}, {})", serde_json::to_string(&text).unwrap());
         self.view().evaluate(&script, |result| {
             if let Err(error) = result {
                 eprintln!("webskiff: cannot finish page search: {error}");
