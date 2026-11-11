@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.0-beta.2](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-11-11)
+
+
+### Features
+
+* automate beta release PRs and tested Homebrew upgrades ([910e00e](https://github.com/engineersamuel/webskiff/commit/910e00e8d6c75c7f41dd8cb81284e47d4cd64578))
+
+
+### Bug Fixes
+
+* preserve release runs and document automatic preview publication ([83cae86](https://github.com/engineersamuel/webskiff/commit/83cae86703c3ffb1d9a86bf9867363d08fc47733))
+* verify scoped installation access rather than user permissions ([c2dd0e9](https://github.com/engineersamuel/webskiff/commit/c2dd0e992898820c920731a3368b09d503e0692b))
+
 ## 0.1.0-beta.1 - Unreleased
 
 ### Browser
