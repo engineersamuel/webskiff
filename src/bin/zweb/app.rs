@@ -287,6 +287,9 @@ impl App {
         // Copy buttons (navigator.clipboard.writeText): allowed, as Chrome
         // allows them after a click. Reading the clipboard stays denied.
         let _ = view.set_permission("clipboard-write", zebkit::PermissionState::Granted, Some("*"));
+        // The engine has no Badging service: a call to setAppBadge makes
+        // Chromium kill the page's renderer (Substack pages do this).
+        view.add_script("delete Navigator.prototype.setAppBadge;delete Navigator.prototype.clearAppBadge");
         if self.opts.placeholders {
             view.add_script(&format!("{PLACEHOLDER_JS}(true)"));
         }
