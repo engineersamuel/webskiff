@@ -27,6 +27,11 @@ See the [verified native run](https://github.com/engineersamuel/webskiff/actions
 for source commit `3869c74`. The separate
 [tap workflow](https://github.com/engineersamuel/homebrew-tap/actions/workflows/test.yml)
 tests the full source-install path on fresh macOS ARM64 runners.
+The [source-install candidate check](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940350241)
+passed source build, strict audit, installed engine/keyboard checks, and uninstall
+on macOS 15.8.2 ARM64. The
+[public-tap check](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940766526)
+uses the exact `brew install engineersamuel/tap/webskiff` command without a local tap override.
 
 Before distributing prebuilt Webskiff binaries:
 

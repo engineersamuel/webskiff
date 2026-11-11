@@ -124,7 +124,7 @@ an error. Restart after editing. Help always shows the configured bindings.
 
 | System | Status |
 |---|---|
-| macOS 13+, Apple Silicon | Native CI build, keyboard, relocated-engine, and Homebrew smoke tests pass; real-terminal acceptance remains open |
+| macOS 13+, Apple Silicon | Native CI and fresh macOS 15.8.2 Homebrew source-install, engine, keyboard, and uninstall tests pass; real-terminal acceptance remains open |
 | Linux x86-64, Ubuntu 24.04 runner | Native CI build, keyboard, and relocated-engine checks pass; experimental, with [sandbox setup requirements](docs/usage.md#linux-sandbox-startup) |
 | macOS Intel / Linux ARM64 | No pinned upstream engine package; not enabled |
 | Windows | Not supported by Webskiff's current Unix terminal implementation |

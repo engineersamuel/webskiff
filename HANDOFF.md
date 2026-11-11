@@ -335,6 +335,14 @@ style and strict audit, installed engine self-tests, three real-browser keyboard
 modes, and uninstall with user-file preservation. Public-tap mode tests the real
 remote install on another fresh runner. Hosted checks do not replace a real
 compatible terminal on a separate physical Mac.
+The [candidate run](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940350241)
+passed all checks on macOS 15.8.2 ARM64. The formula was then published to tap
+`main` at `f483b8c`, byte-identical to the tested recipe. The
+[public-tap run](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940766526)
+tests the exact public install command from a separate fresh runner.
+Application helpers/docs are in PR #7, not merged. The
+[application CI run](https://github.com/engineersamuel/webskiff/actions/runs/42940469186)
+passed native macOS/Linux checks for implementation commit `bf757ba`.
 
 Webskiff compiles locally with Homebrew Rust. The Zebkit/Chromium engine remains
 a checksum-pinned upstream prebuilt download. The executable and engine stay
