@@ -70,8 +70,8 @@ This real terminal recording opens Google, searches for `webskiff zebkit`,
 then uses `Esc`, `f`, and hint `e` to open Zebkit's GitHub page.
 Search results and hint letters can change.
 
-<details>
-<summary>Show the Google search and keyboard-hint GIF (23 seconds)</summary>
+<details open>
+<summary>Google search and keyboard-hint GIF (23 seconds; click to hide)</summary>
 
 ![Webskiff opening Google, searching for webskiff zebkit, showing link hints, and opening Zebkit on GitHub](assets/google-search.gif)
 
