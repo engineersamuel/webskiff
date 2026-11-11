@@ -76,6 +76,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           VERIFY_ONLY: ${{ inputs.verify-only }}
           RELEASE_CREATED: ${{ steps.please.outputs.release_created }}
+          PR_CREATED: ${{ steps.please.outputs.prs_created }}
           RELEASE_COMMIT: ${{ steps.please.outputs.sha }}
           RELEASE_PR: ${{ steps.please.outputs.pr }}
         run: |
@@ -86,7 +87,11 @@ jobs:
           elif [ "$RELEASE_CREATED" = true ]; then
             commit="$RELEASE_COMMIT"
           else
-            echo 'Release PR prepared; publication waits for its manual merge.'
+            if [ "$PR_CREATED" = true ]; then
+              echo 'Release PR prepared; publication waits for its manual merge.'
+            else
+              echo 'No releasable commits; no PR or release was created.'
+            fi
             exit 0
           fi
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]]

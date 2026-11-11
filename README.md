@@ -79,6 +79,8 @@ to HTML. Use an HTML file for a local web page.
 
 Maintainers: see [source-tap updates and optional signed binary releases](docs/releasing.md).
 
+For updates, run `brew update`, then `brew upgrade engineersamuel/tap/webskiff`.
+
 ## Keyboard guide
 
 Press **`?`** or **`F1`** for the full list, generated from your configuration.

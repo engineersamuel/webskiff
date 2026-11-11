@@ -353,6 +353,15 @@ releases, tags, or announcements are published by this path.
 
 ## Open items / not verified
 
+Release-PR automation uses Release Please with Conventional Commit messages and a
+beta channel. After native checks, it prepares version/changelog PRs for the owner
+to merge. A merged release PR produces a draft source release, tests a full
+Homebrew upgrade on a fresh Mac, then promotes the tested formula and publishes
+the source preview. The private key remains in Actions; no Apple signing or
+unsigned prebuilt publication is involved. `docs/releasing.md` describes setup,
+verification mode, and failure recovery. The application bot cannot bypass main
+protection or merge its release PRs.
+
 - **Not seen in herdr** (checked only by rebuilding the screen from zweb's output):
   - Fix for gray grid lines on white pages (each tile is sent with a 1-pixel border, and `x,y,w,h` crops it).
   - If the lines are still there, try `--scale 2`.
