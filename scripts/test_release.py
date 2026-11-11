@@ -94,6 +94,67 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "owner/name"):
             release.brew_formula('bad/"repository', self.root, self.root / "bad.rb", False)
 
+    def source_archive(self, commit, cargo=None, engine=None):
+        archive = self.root / "source.tar.gz"
+        documents = {
+            "Cargo.toml": (release.ROOT / "Cargo.toml").read_bytes(),
+            "packaging/engines.json": (release.ROOT / "packaging/engines.json").read_bytes(),
+        }
+        if cargo is not None:
+            documents["Cargo.toml"] = cargo
+        if engine is not None:
+            documents["packaging/engines.json"] = engine
+        with tarfile.open(archive, "w:gz") as stream:
+            for name, data in documents.items():
+                member = tarfile.TarInfo(f"webskiff-{commit}/{name}")
+                member.size = len(data)
+                stream.addfile(member, io.BytesIO(data))
+        return archive
+
+    def test_source_formula_builds_locally_with_pinned_source_and_engine_without_signing(self):
+        commit = "a" * 40
+        archive = self.source_archive(commit)
+        output = self.root / "Formula/webskiff.rb"
+
+        def download(command, **kwargs):
+            Path(command[command.index("--output") + 1]).write_bytes(archive.read_bytes())
+
+        with patch.object(release.subprocess, "run", side_effect=download), patch.object(
+            release, "check_distribution_approval", side_effect=AssertionError("binary-only gate"),
+        ), patch.dict(os.environ, {}, clear=True):
+            release.source_brew_formula("example/webskiff", commit, output)
+        formula = output.read_text()
+        self.assertIn(f"/archive/{commit}.tar.gz", formula)
+        self.assertIn(release.checksum(archive), formula)
+        self.assertIn(release.engines()["targets"]["aarch64-apple-darwin"]["sha256"], formula)
+        self.assertIn('system "cargo", "install", *std_cargo_args(root: libexec), "--bin", "webskiff"', formula)
+        self.assertIn('(libexec/"bin").install "target/release/zebkit"', formula)
+        self.assertIn('bin.write_exec_script libexec/"bin/webskiff"', formula)
+        self.assertIn('shell_output("#{bin}/webskiff --help")', formula)
+        self.assertNotIn("--selftest", formula)
+
+    def test_source_formula_rejects_mutable_refs_mismatched_metadata_and_overwrites(self):
+        output = self.root / "webskiff.rb"
+        with patch.object(release.subprocess, "run") as download:
+            with self.assertRaisesRegex(ValueError, "immutable commit"):
+                release.source_brew_formula("example/webskiff", "main", output)
+        download.assert_not_called()
+        commit = "b" * 40
+
+        def download(command, **kwargs):
+            Path(command[command.index("--output") + 1]).write_bytes(archive.read_bytes())
+
+        for mismatch in ({"cargo": b'[package]\nversion = "99.0.0"\n'}, {"engine": b"{}"}):
+            with self.subTest(mismatch=mismatch):
+                archive = self.source_archive(commit, **mismatch)
+                with patch.object(release.subprocess, "run", side_effect=download):
+                    with self.assertRaisesRegex(ValueError, "metadata differs"):
+                        release.source_brew_formula("example/webskiff", commit, output)
+        self.assertFalse(output.exists())
+        output.write_text("existing formula")
+        with self.assertRaises(FileExistsError):
+            release.source_brew_formula("example/webskiff", commit, output)
+
     def test_public_distribution_fails_without_approved_license(self):
         with patch.object(release, "ROOT", self.root), patch.object(
             release, "manifest", return_value={"package": {}},

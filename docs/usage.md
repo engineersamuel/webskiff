@@ -99,7 +99,14 @@ Do not disable the Chromium sandbox or certificate checks to make a site work.
 Keep the executable and its `zebkit/` directory together. Replacing only the
 executable can break startup or mix engine versions. Quit before upgrading.
 
-Homebrew will manage installed program files once the tap is published.
+For Homebrew installations, use:
+
+```sh
+brew upgrade engineersamuel/tap/webskiff
+brew uninstall engineersamuel/tap/webskiff
+```
+
+Homebrew manages the installed program and engine together.
 Uninstalling the program must not remove your configuration or profile.
 Profile deletion remains an explicit, separate user action.
 

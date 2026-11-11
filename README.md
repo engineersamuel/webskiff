@@ -12,8 +12,8 @@ Webskiff renders real web pages inside a graphics-capable terminal using
 [Zebkit](https://github.com/ikey4u/zebkit). JavaScript, forms, images, and tabs
 run in Chromium, not a text-only approximation.
 
-**Preview in preparation.** The current version is `0.1.0-beta.1`.
-There is no published binary release or Homebrew tap yet. Do not use this build
+**Experimental preview.** The current version is `0.1.0-beta.1`.
+Homebrew builds Webskiff from source; there is no prebuilt Webskiff release. Do not use this build
 for sensitive accounts or treat it as an approved company browser.
 Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/webskiff).
 
@@ -30,6 +30,25 @@ It contains Kitty graphics: replay with asciinema in a compatible 120x40 termina
 not a text-only web player. See [recording instructions](docs/releasing.md#demo-and-announcements).
 
 ## Get started
+
+### Homebrew: macOS on Apple Silicon
+
+```sh
+brew install engineersamuel/tap/webskiff
+webskiff https://example.com
+```
+
+The [project tap](https://github.com/engineersamuel/homebrew-tap) builds the Rust
+browser locally and installs its checksum-pinned Zebkit/Chromium engine.
+Homebrew installs Rust as a build dependency. The engine is prebuilt upstream;
+this is not a source build of Chromium. No paid Apple Developer membership or
+Webskiff signing certificate is needed.
+
+The full command above adds the tap automatically. After `brew tap engineersamuel/tap`,
+`brew install webskiff` also works. This formula is not in Homebrew's main repository.
+The tap currently supports **Apple Silicon Macs only**, not Intel Macs or Linux.
+
+### Build from this checkout
 
 The locally tested build is **macOS 13+ on Apple Silicon**. Install Rust using
 the version in `rust-toolchain.toml`, plus [uv](https://docs.astral.sh/uv/),
@@ -58,14 +77,7 @@ target/release/webskiff --version
 Local files are rendered according to their content; Markdown is not converted
 to HTML. Use an HTML file for a local web page.
 
-### Homebrew and binary packages
-
-The release workflow prepares versioned packages containing **both the browser
-and its engine**. It also generates a checksum-pinned `webskiff.rb` formula for a
-project-owned tap. Installation will be advertised here only after a release,
-tap, signing, and fresh-machine installation have been verified.
-
-Maintainers: see [release and Homebrew setup](docs/releasing.md).
+Maintainers: see [source-tap updates and optional signed binary releases](docs/releasing.md).
 
 ## Keyboard guide
 
