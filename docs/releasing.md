@@ -1,6 +1,8 @@
 # Releasing Webskiff
 
-The checked-in workflows prepare releases; they do not publish them.
+Source-built Homebrew installation is the primary distribution path.
+Apple signing is optional future work for prebuilt Webskiff downloads.
+The application's checked-in workflows prepare binary releases; they do not publish them.
 A successful build is not permission to claim production readiness.
 
 ## Current gates
@@ -17,13 +19,21 @@ allows only `v*` tags, and does not allow administrator bypass. Public visibilit
 removed the previous plan restriction on these protections.
 Webskiff's own code is licensed under MIT, with `LICENSE` and Cargo SPDX metadata
 in place. Zebkit is credited in the README and third-party notices. A complete
-reviewed engine license bundle and Apple signing credentials are still missing.
+reviewed engine license bundle is still needed before Webskiff binary redistribution.
+Apple signing credentials are not required for source-built Homebrew installation.
 Native macOS and Linux CI have passed the build,
 keyboard, and relocated-engine tests; macOS also passed the isolated Homebrew test.
-See the [verified native run](https://github.com/engineersamuel/webskiff/actions/runs/42887920588)
-for source commit `1aff5b2`. No fresh-machine installation has been verified.
+See the [verified native run](https://github.com/engineersamuel/webskiff/actions/runs/42898490128)
+for source commit `3869c74`. The separate
+[tap workflow](https://github.com/engineersamuel/homebrew-tap/actions/workflows/test.yml)
+tests the full source-install path on fresh macOS ARM64 runners.
+The [source-install candidate check](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940350241)
+passed source build, strict audit, installed engine/keyboard checks, and uninstall
+on macOS 15.8.2 ARM64. The
+[public-tap check](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940766526)
+uses the exact `brew install engineersamuel/tap/webskiff` command without a local tap override.
 
-Before public distribution:
+Before distributing prebuilt Webskiff binaries:
 
 1. Retain the owner's publication and redistribution approval. Keep separate any
    company approval needed for using sensitive accounts or deploying internally.
@@ -31,8 +41,9 @@ Before public distribution:
    notices under `packaging/third-party/`. Preserve the source/relinking material
    required by the approved redistribution terms. `dependencies.json` is an
    inventory, not a substitute for these materials.
-1. Choose a `homebrew-tap` repository. Reviewed source has been pushed to the
-   public application repository. No binary release or tap has been published.
+1. Keep source-tap installation separate from binary packaging. The source tap
+   downloads the engine directly from upstream and builds Webskiff locally;
+   it does not use or weaken the signed-binary release gates.
 1. Review and include all intended source files. A clean checkout must build.
    Do not commit engine binaries, profiles, credentials, or build outputs.
 1. Run CI on macOS ARM64 and experimental Linux x86-64. Fix failures before
@@ -123,7 +134,65 @@ performance checks. An engine security release should trigger a prompt review,
 not wait for the next feature release. Dependabot checks Cargo and Actions
 weekly but does not replace monitoring the engine's release/security channels.
 
-## Signing and draft release workflow
+## Source-built Homebrew tap
+
+The tap is [engineersamuel/homebrew-tap](https://github.com/engineersamuel/homebrew-tap).
+Users install with `brew install engineersamuel/tap/webskiff`.
+It currently targets macOS on Apple Silicon only. Homebrew supplies the Rust
+build dependency. No Apple account, certificate, or paid membership is needed.
+The Chromium engine is still a pinned upstream binary, not built from source.
+
+Generate a formula from the checkout matching the intended source commit:
+
+```fish
+set source_commit (git rev-parse HEAD)
+uv run --no-project python -I scripts/release.py brew-source \
+  --repository engineersamuel/webskiff --commit "$source_commit" \
+  --output dist/Formula/webskiff.rb
+```
+
+Push that source commit to GitHub first. The generator requires a full immutable
+commit SHA, downloads the real source archive, computes its SHA-256, and checks
+that its Cargo and engine metadata match the local checkout. The engine resource
+URL and hash come from `packaging/engines.json`. Mutable refs and existing output
+paths are rejected. Bump the application version before a later tap release;
+do not silently change the source behind an already published version.
+
+The formula uses Homebrew's standard locked Cargo installation, installs the
+engine beside the executable under `libexec/bin`, and creates an exec wrapper
+at `bin/webskiff`. A plain symlink failed engine startup and is not used.
+The example configuration, MIT license, and third-party credits are installed
+under `share/webskiff`. The formula does not change or remove user files.
+
+For tap updates:
+
+1. Generate the formula and put it under `Formula/webskiff.rb` in a tap branch.
+1. Run the tap's **Source install** workflow on that candidate. It uses actual
+   `brew install --build-from-source`, the normal build sandbox, formula style
+   and strict audit checks, `brew test`, an installed-engine self-test, and all
+   three real-browser keyboard checks against the installed wrapper.
+1. Confirm uninstall removes the wrapper but preserves user configuration and
+   profile sentinels. An initial install cannot prove upgrades from an older
+   version; test upgrades when a second version exists.
+1. Review and approve the tap update before merging its PR. Do not merge without
+   the owner's explicit approval for that specific merge.
+1. Dispatch the workflow on `main` with `public-tap=true`. A separate fresh Mac
+   runner then installs from the real public tap without a local override.
+1. Review a real compatible terminal on a separate Mac before broad release or
+   announcements. Hosted PTY checks do not prove physical display, media, SSO,
+   accessibility, or company-policy acceptance.
+
+The workflow does not use `--no-sandbox`, remove quarantine, disable Gatekeeper,
+publish bottles, or need Apple secrets. Source installation is independent of
+`PUBLIC_RELEASE_ENABLED`, which continues to disable prebuilt release jobs.
+`brew test` checks CLI version/help. Chromium cannot start its sandbox inside
+Homebrew's test sandbox, so the engine and browser checks run separately through
+the installed wrapper with disposable profiles. Chromium's sandbox stays enabled.
+
+## Optional signing and draft binary release workflow
+
+The source-tap path above does not need this setup. Keep these steps for a future
+decision to distribute signed, notarized prebuilt Webskiff downloads.
 
 The GitHub environment named **`release`** is configured with owner approval,
 `v*` tag-only deployment restrictions, and administrator bypass disabled.
@@ -206,13 +275,14 @@ Failed uploads leave the release in draft. Inspect partial results; do not
 overwrite assets with `--clobber`. A published release is a separate manual
 decision.
 
-## Homebrew tap
+## Optional binary-package Homebrew formula
 
 The generated formula installs the binary and engine under `libexec`, then
 creates an exec wrapper at `bin/webskiff`. A plain symlink failed the packaged
 engine test; the wrapper invokes the real executable beside its engine.
 It does not change or delete user configuration or profiles.
-Its `brew test` checks the version and headless engine operation.
+Its `brew test` checks version/help. Run engine checks separately to avoid
+nesting Chromium's sandbox inside Homebrew's test sandbox.
 
 CI also runs the actual formula installation method in an isolated prefix and
 starts the engine through its installed wrapper. This does not replace testing

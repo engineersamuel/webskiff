@@ -241,7 +241,8 @@ clearance. The selected source remote is the public
 Native macOS CI passed the build, keyboard, relocated-engine, and Homebrew smoke
 tests. Native Linux build, keyboard, and relocated-engine checks also pass.
 The [verified native run](https://github.com/engineersamuel/webskiff/actions/runs/42887920588)
-tested source commit `1aff5b2`. There is no public release or published tap.
+tested source commit `1aff5b2`. The newer source-tap path is described below;
+there is no published prebuilt Webskiff release.
 
 The generated Homebrew formula keeps the binary and engine under libexec.
 A plain bin symlink failed real engine startup; the standard exec wrapper passed.
@@ -272,7 +273,7 @@ Small samples do not prove a regression or prove its absence. Performance/output
 approval remains open. No sub-10-ms or smooth-YouTube release claim is justified.
 
 The owner approved public source and redistribution. Before binary publication,
-the required engine/dependency notices must be bundled, a tap selected, and
+the required engine/dependency notices must be bundled, and
 signing/notarization configured. The protected release environment is in place.
 Also required: passing native hosted CI on the release tag,
 quarantined fresh-Mac installation, full Homebrew lifecycle tests, and actual
@@ -307,6 +308,7 @@ Public visibility resolved the earlier plan restriction. The `release`
 environment requires approval from `engineersamuel`, permits only `v*` tags, and
 disables administrator bypass. No signing credentials were read or handled.
 The account owner's setup steps are in `docs/releasing.md#one-time-apple-setup`.
+They are optional for future binary downloads, not a source-install requirement.
 The first hosted macOS run passed. Linux initially refused startup because
 Ubuntu blocked Chromium's sandbox namespaces. CI now allows user namespaces on
 the disposable hosted Linux runner; Chromium's sandbox was not disabled.
@@ -316,6 +318,38 @@ A later Linux run exposed the fixed four-second startup assumption; an unchanged
 rerun passed. Functional keyboard checks now wait for the fixture title, with a
 bounded failure and engine-log output. Per-key assertion windows and benchmark
 warm-up behavior are unchanged.
+
+### Source-built Homebrew distribution
+
+The owner chose `brew install engineersamuel/tap/webskiff` without a paid Apple
+Developer membership. `scripts/release.py brew-source` generates a macOS ARM64
+formula pinned to a full source SHA, source archive checksum, and upstream engine
+checksum. It verifies source Cargo/engine metadata against the local checkout.
+The first recipe uses already-reviewed source commit
+`3869c74e35c6a4f51ff0b4a7627d5eb36c576d7e`; helper/docs changes do not require
+bypassing the protected application branch.
+
+The tap is `https://github.com/engineersamuel/homebrew-tap`. Its separate native
+macOS workflow tests actual Homebrew source installation, standard build sandbox,
+style and strict audit, installed engine self-tests, three real-browser keyboard
+modes, and uninstall with user-file preservation. Public-tap mode tests the real
+remote install on another fresh runner. Hosted checks do not replace a real
+compatible terminal on a separate physical Mac.
+The [candidate run](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940350241)
+passed all checks on macOS 15.8.2 ARM64. The formula was then published to tap
+`main` at `f483b8c`, byte-identical to the tested recipe. The
+[public-tap run](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940766526)
+tests the exact public install command from a separate fresh runner.
+Application helpers/docs are in PR #7, not merged. The
+[application CI run](https://github.com/engineersamuel/webskiff/actions/runs/42940469186)
+passed native macOS/Linux checks for implementation commit `bf757ba`.
+
+Webskiff compiles locally with Homebrew Rust. The Zebkit/Chromium engine remains
+a checksum-pinned upstream prebuilt download. The executable and engine stay
+adjacent under `libexec/bin`, with an exec wrapper under `bin`. Source installs
+do not require Apple secrets or change the guarded signed-binary workflow.
+`PUBLIC_RELEASE_ENABLED` remains false. No bottles, unsigned Webskiff binary
+releases, tags, or announcements are published by this path.
 
 ## Open items / not verified
 

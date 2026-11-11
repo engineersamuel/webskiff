@@ -1,4 +1,4 @@
-"""Build and verify relocatable Webskiff packages. Requires Python 3.12+."""
+"""Prepare Webskiff packages and source Homebrew recipes. Requires Python 3.12+."""
 
 import argparse
 import hashlib
@@ -325,7 +325,85 @@ def brew_formula(repository, directory, output, require_release=True):
 
   test do
     assert_match "webskiff #{{version}}", shell_output("#{{bin}}/webskiff --version")
-    assert_match "ALL PASSED", shell_output("#{{bin}}/webskiff --selftest")
+    assert_match "Usage: webskiff", shell_output("#{{bin}}/webskiff --help")
+  end
+end
+'''
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("x") as stream:
+        stream.write(text)
+    return output
+
+
+def source_archive_metadata(archive, repository, commit):
+    root = f"{repository.split('/')[1]}-{commit}"
+    with tarfile.open(archive, "r:gz") as stream:
+        cargo = tomllib.loads(stream.extractfile(f"{root}/Cargo.toml").read().decode())
+        engine = json.load(stream.extractfile(f"{root}/packaging/engines.json"))
+    if cargo != manifest() or engine != engines():
+        raise ValueError("source archive Cargo/engine metadata differs from this checkout")
+    if cargo["package"].get("license") != "MIT":
+        raise ValueError("source formula requires the approved MIT project license")
+
+
+def source_brew_formula(repository, commit, output):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ValueError("repository must be owner/name")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("source formula requires a full immutable commit SHA")
+    if output.exists():
+        raise FileExistsError(f"refusing to replace formula: {output}")
+    url = f"https://github.com/{repository}/archive/{commit}.tar.gz"
+    with tempfile.TemporaryDirectory(prefix="webskiff-source-") as directory:
+        archive = Path(directory) / "source.tar.gz"
+        subprocess.run(
+            ["curl", "--fail", "--location", "--silent", "--show-error",
+             "--user-agent", USER_AGENT, "--output", str(archive), url],
+            check=True,
+        )
+        source_archive_metadata(archive, repository, commit)
+        digest = checksum(archive)
+    engine, target = target_info("aarch64-apple-darwin")
+    engine_name = f"zebkit-{engine['version']}-aarch64-apple-darwin"
+    text = f'''class Webskiff < Formula
+  desc "Keyboard-first Chromium browser for your terminal"
+  homepage "https://github.com/{repository}"
+  url "{url}"
+  version "{version()}"
+  sha256 "{digest}"
+  license "MIT"
+
+  depends_on "rust" => :build
+
+  depends_on arch: :arm64
+  depends_on :macos
+
+  on_macos do
+    depends_on macos: :ventura
+  end
+
+  resource "zebkit" do
+    url "https://github.com/ikey4u/zebkit/releases/download/v{engine['version']}/{engine_name}.tar.xz"
+    sha256 "{target['sha256']}"
+  end
+
+  def install
+    resource("zebkit").stage do
+      (buildpath/"engine").install Dir["*"]
+    end
+    ENV["ZEBKIT_DIR"] = (buildpath/"engine").to_s
+    ENV["WEBSKIFF_BUILD_COMMIT"] = "{commit}"
+    ENV["CARGO_HTTP_USER_AGENT"] = "{USER_AGENT}"
+    system "cargo", "install", *std_cargo_args(root: libexec), "--bin", "webskiff"
+    (libexec/"bin").install "target/release/zebkit"
+    bin.write_exec_script libexec/"bin/webskiff"
+    (bin/"webskiff").chmod 0755
+    pkgshare.install "config.example.toml", "LICENSE", "THIRD_PARTY_NOTICES.md"
+  end
+
+  test do
+    assert_match "webskiff #{{version}}", shell_output("#{{bin}}/webskiff --version")
+    assert_match "Usage: webskiff", shell_output("#{{bin}}/webskiff --help")
   end
 end
 '''
@@ -408,6 +486,10 @@ def parser():
     brew.add_argument("--directory", type=Path, default=ROOT / "dist")
     brew.add_argument("--output", type=Path, required=True)
     brew.add_argument("--internal-test", action="store_true", help="Generate a non-publishable test formula")
+    source = commands.add_parser("brew-source", help="Generate a source-building macOS ARM64 formula")
+    source.add_argument("--repository", required=True)
+    source.add_argument("--commit", required=True)
+    source.add_argument("--output", type=Path, required=True)
     commands.add_parser("check-distribution")
     draft = commands.add_parser("draft")
     draft.add_argument("--repository", required=True)
@@ -432,6 +514,8 @@ def main():
             verify(args.archive, args.selftest)
         elif args.command == "brew":
             print(brew_formula(args.repository, args.directory, args.output, not args.internal_test))
+        elif args.command == "brew-source":
+            print(source_brew_formula(args.repository, args.commit, args.output))
         elif args.command == "draft":
             draft_release(args.repository, args.tag, args.directory)
         else:
