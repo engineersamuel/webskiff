@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      verify-release-automation:
+        description: Verify App access, create a release PR on this branch, and test its Homebrew upgrade without publishing
+        type: boolean
+        default: false
   workflow_call:
 
 permissions:
@@ -12,7 +17,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -87,3 +92,14 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
           retention-days: 7
+
+  release:
+    needs: build
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.verify-release-automation)
+    uses: ./.github/workflows/source-release.yml
+    with:
+      verify-only: ${{ github.event_name == 'workflow_dispatch' }}
+    secrets:
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}

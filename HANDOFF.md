@@ -340,7 +340,7 @@ passed all checks on macOS 15.8.2 ARM64. The formula was then published to tap
 `main` at `f483b8c`, byte-identical to the tested recipe. The
 [public-tap run](https://github.com/engineersamuel/homebrew-tap/actions/runs/42940766526)
 tests the exact public install command from a separate fresh runner.
-Application helpers/docs are in PR #7, not merged. The
+Application helpers/docs were merged in PR #7. The
 [application CI run](https://github.com/engineersamuel/webskiff/actions/runs/42940469186)
 passed native macOS/Linux checks for implementation commit `bf757ba`.
 
@@ -352,6 +352,15 @@ do not require Apple secrets or change the guarded signed-binary workflow.
 releases, tags, or announcements are published by this path.
 
 ## Open items / not verified
+
+Release-PR automation uses Release Please with Conventional Commit messages and a
+beta channel. After native checks, it prepares version/changelog PRs for the owner
+to merge. A merged release PR produces a draft source release, tests a full
+Homebrew upgrade on a fresh Mac, then promotes the tested formula and publishes
+the source preview. The private key remains in Actions; no Apple signing or
+unsigned prebuilt publication is involved. `docs/releasing.md` describes setup,
+verification mode, and failure recovery. The application bot has no main
+protection bypass and never merges its release PRs.
 
 - **Not seen in herdr** (checked only by rebuilding the screen from zweb's output):
   - Fix for gray grid lines on white pages (each tile is sent with a 1-pixel border, and `x,y,w,h` crops it).

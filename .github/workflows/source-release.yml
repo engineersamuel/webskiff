@@ -1,0 +1,208 @@
+name: Source release and Homebrew
+
+on:
+  workflow_call:
+    inputs:
+      verify-only:
+        type: boolean
+        default: false
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_HTTP_USER_AGENT: OpenAI File Downloader, XaiImageApiFetch/1.0
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: http.userAgent
+  GIT_CONFIG_VALUE_0: OpenAI File Downloader, XaiImageApiFetch/1.0
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.candidate.outputs.commit }}
+      tag: ${{ steps.please.outputs.tag_name }}
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Refuse to release a newer, untested branch head
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          actual="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)"
+          test "$actual" = "$EXPECTED_COMMIT"
+      - name: Authenticate release App
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: engineersamuel
+          repositories: |
+            webskiff
+            homebrew-tap
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+      - name: Verify installation access without printing credentials
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          gh api installation/repositories \
+            -H "User-Agent: $CARGO_HTTP_USER_AGENT" \
+            --jq '.repositories | map(.full_name) | sort' |
+            jq -e '. == ["engineersamuel/homebrew-tap", "engineersamuel/webskiff"]'
+      - name: Prepare SemVer release PR or draft source release
+        id: please
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+          target-branch: ${{ github.ref_name }}
+          skip-github-release: ${{ inputs.verify-only }}
+      - name: Resolve the exact source to test
+        id: candidate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERIFY_ONLY: ${{ inputs.verify-only }}
+          RELEASE_CREATED: ${{ steps.please.outputs.release_created }}
+          PR_CREATED: ${{ steps.please.outputs.prs_created }}
+          RELEASE_COMMIT: ${{ steps.please.outputs.sha }}
+          RELEASE_PR: ${{ steps.please.outputs.pr }}
+        run: |
+          if [ "$VERIFY_ONLY" = true ]; then
+            number="$(printf '%s' "$RELEASE_PR" | jq -er .number)"
+            commit="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" \
+              -H "User-Agent: $CARGO_HTTP_USER_AGENT" --jq .head.sha)"
+          elif [ "$RELEASE_CREATED" = true ]; then
+            commit="$RELEASE_COMMIT"
+          else
+            if [ "$PR_CREATED" = true ]; then
+              echo 'Release PR prepared; publication waits for its manual merge.'
+            else
+              echo 'No releasable commits; no PR or release was created.'
+            fi
+            exit 0
+          fi
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  formula:
+    needs: plan
+    if: needs.plan.outputs.commit != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          python-version: "3.13"
+          version: "0.11.21"
+          enable-cache: false
+      - name: Confirm release tag matches the source version
+        if: ${{ !inputs.verify-only }}
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: uv run --no-project python -I scripts/release.py check-tag "$RELEASE_TAG"
+      - name: Generate the immutable source formula
+        env:
+          SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
+        run: |
+          uv run --no-project python -I scripts/release.py brew-source \
+            --repository "$GITHUB_REPOSITORY" --commit "$SOURCE_COMMIT" \
+            --output candidate/webskiff.rb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-formula
+          path: candidate/webskiff.rb
+          if-no-files-found: error
+          retention-days: 14
+
+  homebrew:
+    needs: [plan, formula]
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          python-version: "3.13"
+          version: "0.11.21"
+          enable-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-formula
+          path: candidate
+      - name: Test actual source installation and upgrade on a fresh Mac
+        env:
+          SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}
+        run: |
+          version="$(uv run --no-project python -I scripts/release.py version)"
+          bash scripts/test-source-brew.sh "$PWD/candidate/webskiff.rb" "$SOURCE_COMMIT" "$version"
+
+  publish:
+    needs: [plan, homebrew]
+    if: ${{ !inputs.verify-only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Authenticate publisher for these two repositories only
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: engineersamuel
+          repositories: |
+            webskiff
+            homebrew-tap
+          permission-contents: write
+      - name: Check out tap with release-bot authentication
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: engineersamuel/homebrew-tap
+          ref: main
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-formula
+          path: candidate
+      - name: Promote only the exact tested formula
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          cp candidate/webskiff.rb Formula/webskiff.rb
+          if git diff --quiet -- Formula/webskiff.rb; then
+            echo 'Tap already contains the tested formula.'
+          else
+            git config user.name 'Webskiff release bot'
+            git config user.email 'webskiff-release-bot@users.noreply.github.com'
+            git add Formula/webskiff.rb
+            git commit -m "chore: release Webskiff $RELEASE_TAG"
+            git push origin HEAD:main
+          fi
+      - name: Publish the source-only GitHub preview
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          release_id="$(gh api "repos/engineersamuel/webskiff/releases/tags/$RELEASE_TAG" \
+            -H "User-Agent: $CARGO_HTTP_USER_AGENT" --jq .id)"
+          gh api "repos/engineersamuel/webskiff/releases/$release_id" --method PATCH \
+            -H "User-Agent: $CARGO_HTTP_USER_AGENT" -F draft=false \
+            --jq .html_url

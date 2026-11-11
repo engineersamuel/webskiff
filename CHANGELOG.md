@@ -23,9 +23,9 @@
 
 ### Known limitations
 
-- No public release or Homebrew tap has been published.
-- Project licensing, upstream redistribution notices, signing credentials,
-  GitHub runner execution, and fresh-machine installation remain release gates.
+- A source-built Homebrew tap is available for macOS on Apple Silicon.
+- Webskiff's own code is MIT-licensed. Public prebuilt binary downloads still need
+  complete upstream notices and the separate platform signing checks.
 - Real-terminal display performance and sustained video/audio sync remain open.
 - Linux is experimental; no macOS Intel, Linux ARM64, or Windows support claim.
 - Corporate sign-in and accessibility support have not been accepted.

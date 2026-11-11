@@ -13,7 +13,7 @@ and all 20 existing commits passed a local redacted Gitleaks scan before the
 visibility change. This scan is not a guarantee that every sensitive item is absent.
 Repository-local HTTPS Git
 authentication uses the GitHub CLI credential helper, not a stored token file.
-`PUBLIC_RELEASE_ENABLED=false` keeps public release jobs disabled.
+`PUBLIC_RELEASE_ENABLED=false` keeps public binary-release jobs disabled.
 The protected `release` environment requires approval from `engineersamuel`,
 allows only `v*` tags, and does not allow administrator bypass. Public visibility
 removed the previous plan restriction on these protections.
@@ -77,6 +77,61 @@ architecture. Existing artifact paths are never overwritten.
 Never move a published tag or replace a published package: release a new version.
 Release tags accept normal versions or prerelease identifiers, not `+build`
 metadata.
+
+## Automatic release PRs
+
+After the automation PR is merged, successful native checks on `main` call
+`source-release.yml`. Release Please opens or updates a release PR with the Cargo
+version, lockfile, release manifest, and changelog changes. You review and merge
+that PR yourself; the bot never merges an application PR.
+
+Use Conventional Commit **messages**, not only PR titles: rebase merging preserves
+individual messages. `fix: ...` means a patch, `feat: ...` means a feature, and
+`feat!: ...` or a `BREAKING CHANGE:` footer marks an incompatible change.
+Before 1.0, incompatible changes bump the minor version. The configured
+prerelease strategy keeps releases on the `beta` channel. Stable releases need
+an explicit configuration change after acceptance.
+
+After you merge the release PR:
+
+1. Both supported native targets build and pass their browser/engine checks.
+1. The App creates a **draft source-only GitHub preview**.
+1. The workflow generates the formula from the exact release commit.
+1. A fresh macOS ARM64 runner installs the previous public tap version, upgrades
+   to the candidate, verifies its full build commit, and runs style, strict audit,
+   CLI, engine, keyboard, and user-file-preservation checks.
+1. Only then does the App push that exact tested formula to the tap and publish
+   the GitHub preview. No prebuilt Webskiff binary is uploaded.
+
+Native `main` runs are not cancelled by newer pushes, so a later merge cannot
+interrupt publication halfway through. Older heads are rejected before release
+planning if they no longer match the branch. Release jobs are serialized.
+If a later stage fails, the tap remains unchanged until its test passes and the
+GitHub release stays in draft until promotion succeeds. Use **Re-run failed jobs**
+to retry; do not move tags or replace published assets.
+
+The private App key is stored only in the repository secret
+`RELEASE_APP_PRIVATE_KEY`; its Client ID is the variable `RELEASE_APP_CLIENT_ID`.
+App tokens are short-lived and scoped per job. Build/install jobs receive no
+App token. Only this App may bypass the tap's PR/status requirements; separate
+history rules still prohibit force pushes and deletion. Application `main`
+retains its existing protections and has no bot bypass.
+
+For a non-publishing end-to-end check, dispatch **Build and test** on the
+automation branch with `verify-release-automation=true`. This creates a real
+release PR against that branch and tests the resulting formula, including an
+upgrade from the live version. It does not merge a PR, update tap `main`, or
+publish a GitHub release.
+
+Users receive updates with:
+
+```sh
+brew update
+brew upgrade engineersamuel/tap/webskiff
+```
+
+`brew update` refreshes all tap metadata; it does not accept a formula name.
+`brew upgrade` installs the new Webskiff version.
 
 ## Local checks and packages
 
