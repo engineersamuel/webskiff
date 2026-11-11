@@ -13,7 +13,7 @@ use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse};
 use zebkit::page::DialogPolicy;
 use zebkit::{LoadEvent, View};
 
-use crate::{app::HINTS_JS, keys, render};
+use crate::{app::{FIND_JS, HINTS_JS}, keys, render};
 
 const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:16px sans-serif}
 #f{position:absolute;left:10px;top:10px;width:200px;height:20px}
@@ -21,7 +21,9 @@ const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:1
 <form onsubmit="document.title='submitted:'+f.value;return false"><input id=f></form>
 <button id=b onclick="this.textContent='clicked'">button</button>
 <select id=s><option>one</option><option>two</option></select>
-<button id=w onclick="window.open('about:blank')">popup</button>"#;
+<button id=w onclick="window.open('about:blank')">popup</button>
+<a id=t1 href=#a onclick="window.followed=1;return false" style="position:absolute;top:2000px">find target</a>
+<a id=t2 href=#b onclick="window.followed=2;return false" style="position:absolute;top:2100px">other target</a>"#;
 
 #[derive(Default)]
 struct Ctx {
@@ -136,6 +138,24 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("window.r", "true"),
         ),
+        (
+            "accepted find marks every match yellow",
+            Box::new(|_, v| {
+                v.evaluate(FIND_JS, |_| {});
+                v.evaluate("__zwebFind.preview('target')", |_| {});
+                v.evaluate("__zwebFind.finish(true, 'target')", |_| {});
+            }),
+            Check::Js("CSS.highlights.get('zweb-find').size", "2"),
+        ),
+        (
+            "n moves to the next match and focuses its link",
+            Box::new(|_, v| {
+                let lib = FIND_JS.split("\n// SEARCH SESSION").next().unwrap();
+                v.evaluate(&format!("{lib};__zwebSearch.step('target', false)"), |_| {});
+            }),
+            Check::Js("document.activeElement.id", "\"t2\""),
+        ),
+        ("Enter opens the link at the match", Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))), Check::Js("window.followed", "2")),
         (
             "frame cost at 1280x800 CSS, scale 1",
             Box::new(|c, v| {
