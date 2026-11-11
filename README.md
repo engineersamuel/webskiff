@@ -15,7 +15,6 @@ run in Chromium, not a text-only approximation.
 **Experimental preview.** Check your installed version with `webskiff --version`.
 Homebrew builds Webskiff from source; there is no prebuilt Webskiff release. Do not use this build
 for sensitive accounts or treat it as an approved company browser.
-Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/webskiff).
 
 [Get started](#get-started) · [Watch Webskiff](#watch-webskiff) · [Keyboard guide](#keyboard-guide) ·
 [Configuration](#configuration) · [Support](#support) ·
@@ -27,7 +26,10 @@ Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/w
 Requires **macOS 13+ on Apple Silicon**. Intel Macs and Linux are not supported
 by the Homebrew formula.
 For full-page graphics, use a terminal that supports the Kitty graphics
-protocol, such as [Kitty](https://sw.kovidgoyal.net/kitty/).
+protocol, for example [Kitty](https://sw.kovidgoyal.net/kitty/),
+[Ghostty](https://ghostty.org/), or [WezTerm](https://wezterm.org/).
+Webskiff does not support Sixel. A Sixel-only terminal gets the coarse
+half-block fallback, not full-page graphics.
 
 ### First install
 
@@ -78,46 +80,6 @@ Search results and hint letters can change.
 Close this section to hide the animation. The final frame is held briefly.
 
 </details>
-
-[Download the original Google terminal recording](assets/google-search.cast.gz)
-for replay at 100x32 cells.
-
-[A separate local-fixture recording](assets/demo.cast.gz) shows scrolling, live
-search, match navigation, tabs, hints, and help.
-Replay it at 120x40 cells. Both recordings contain Kitty graphics: use asciinema
-in a compatible terminal, not a text-only web player.
-See [replay instructions](docs/releasing.md#demo-and-announcements).
-
-## Build from this checkout
-
-The locally tested build is **macOS 13+ on Apple Silicon**. Install Rust using
-the version in `rust-toolchain.toml`, plus [uv](https://docs.astral.sh/uv/),
-`curl`, and `xz`. From this repository:
-
-```sh
-uv run --no-project python -I scripts/release.py fetch-engine
-```
-
-Then build and run (Fish syntax):
-
-```fish
-env ZEBKIT_DIR="$PWD/engine/verified/zebkit-0.4.0-aarch64-apple-darwin" cargo build --release --locked --bin webskiff
-target/release/webskiff https://example.com
-```
-
-For Bash or Zsh, the same `env ... cargo build ...` command works.
-Open a URL, a quoted search, or a local file:
-
-```sh
-target/release/webskiff 'terminal graphics protocol'
-target/release/webskiff ./README.md
-target/release/webskiff --version
-```
-
-Local files are rendered according to their content; Markdown is not converted
-to HTML. Use an HTML file for a local web page.
-
-Maintainers: see [source-tap updates and optional signed binary releases](docs/releasing.md).
 
 ## Keyboard guide
 
@@ -200,20 +162,10 @@ Zebkit contributors** for the Chromium embedding engine that makes Webskiff poss
 Webskiff's own code is licensed under [MIT](LICENSE). Zebkit, Chromium, and other
 dependencies retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
 
-## Development
+## Contributing
 
-```fish
-env ZEBKIT_DIR="$PWD/engine/verified/zebkit-0.4.0-aarch64-apple-darwin" bash scripts/check.sh
-```
-
-CI checks macOS ARM64 and experimental Linux x86-64, then tests an extracted
-package away from the build directory. The macOS job also runs the generated
-Homebrew formula's installation method in a disposable prefix.
-Tags must match the Cargo version.
-Public packaging is blocked until licensing and signing prerequisites are met.
+To build from this checkout or run the development checks, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) ·
 [Changelog](CHANGELOG.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
-
-The Window wake identity is in [assets/](assets/). No logo or splash screen is
-drawn during browsing. `zebkit-probe` remains a separate developer timing tool.
