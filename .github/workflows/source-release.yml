@@ -60,9 +60,8 @@ jobs:
         run: |
           gh api installation/repositories \
             -H "User-Agent: $CARGO_HTTP_USER_AGENT" \
-            --jq '.repositories[].full_name'
-          test "$(gh api repos/engineersamuel/homebrew-tap \
-            -H "User-Agent: $CARGO_HTTP_USER_AGENT" --jq .permissions.push)" = true
+            --jq '.repositories | map(.full_name) | sort' |
+            jq -e '. == ["engineersamuel/homebrew-tap", "engineersamuel/webskiff"]'
       - name: Prepare SemVer release PR or draft source release
         id: please
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
