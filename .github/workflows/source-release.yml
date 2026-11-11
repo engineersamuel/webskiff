@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       commit: ${{ steps.candidate.outputs.commit }}
-      tag: ${{ steps.please.outputs.tag_name }}
+      tag: ${{ steps.draft.outputs.tag_name }}
     steps:
       - name: Check out tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,15 +62,24 @@ jobs:
             -H "User-Agent: $CARGO_HTTP_USER_AGENT" \
             --jq '.repositories | map(.full_name) | sort' |
             jq -e '. == ["engineersamuel/homebrew-tap", "engineersamuel/webskiff"]'
-      - name: Prepare SemVer release PR or draft source release
-        id: please
+      - name: Prepare the merged release as a draft
+        id: draft
+        if: ${{ !inputs.verify-only }}
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         with:
           token: ${{ steps.app.outputs.token }}
           target-branch: ${{ github.ref_name }}
-          skip-github-release: ${{ inputs.verify-only }}
+          skip-github-pull-request: true
+      - name: Prepare a SemVer release PR when no draft was created
+        id: please
+        if: ${{ inputs.verify-only || steps.draft.outputs.release_created != 'true' }}
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+          target-branch: ${{ github.ref_name }}
+          skip-github-release: true
       - name: Merge the release PR after its required checks pass
-        if: ${{ !inputs.verify-only && steps.please.outputs.release_created != 'true' }}
+        if: ${{ !inputs.verify-only && steps.draft.outputs.release_created != 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
@@ -85,9 +94,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           VERIFY_ONLY: ${{ inputs.verify-only }}
-          RELEASE_CREATED: ${{ steps.please.outputs.release_created }}
+          RELEASE_CREATED: ${{ steps.draft.outputs.release_created }}
           PR_CREATED: ${{ steps.please.outputs.prs_created }}
-          RELEASE_COMMIT: ${{ steps.please.outputs.sha }}
+          RELEASE_COMMIT: ${{ steps.draft.outputs.sha }}
           RELEASE_PR: ${{ steps.please.outputs.pr }}
         run: |
           if [ "$VERIFY_ONLY" = true ]; then
