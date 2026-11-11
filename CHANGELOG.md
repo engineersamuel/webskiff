@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-beta.3](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.2...v0.1.0-beta.3) (2026-11-11)
+
+
+### Features
+
+* automate beta release PRs and tested Homebrew updates ([#8](https://github.com/engineersamuel/webskiff/issues/8)) ([a433a29](https://github.com/engineersamuel/webskiff/commit/a433a292b4264f0eef4ba18ebddff2726086e763))
+
 ## [0.1.0-beta.2](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-11-11)
 
 
