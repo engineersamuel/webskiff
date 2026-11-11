@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-beta.3](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.2...v0.1.0-beta.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* stop Chromium killing pages that call setAppBadge ([#16](https://github.com/engineersamuel/webskiff/issues/16)) ([714187f](https://github.com/engineersamuel/webskiff/commit/714187fb231379592c90053d4ceb83ef97a05a12))
+
 ## [0.1.0-beta.2](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-11-11)
 
 
