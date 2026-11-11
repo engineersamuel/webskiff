@@ -21,8 +21,9 @@ Arrow keys, Page Up/Down, Home/End, Alt-Left/Right, and F5 provide standard
 scrolling, history, and reload alongside the Vim keys.
 
 `/` highlights the current match while typing, case-insensitively with wrapping.
-Enter accepts; `n`/`N` move next/previous; Escape restores the original selection
-and scroll when cancelling. Only the current match is highlighted.
+Enter accepts and marks every match in yellow; `n`/`N` move next/previous.
+When the current match is in a link, Enter opens that link. Escape in the
+prompt restores the original selection and scroll; Escape after it clears the marks.
 Ctrl-F leaves its prompt open; Enter/Shift-Enter moves next/previous.
 
 Prompts support arrows, Home/End, Delete/Backspace, paste at the cursor,
