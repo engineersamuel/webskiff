@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-beta.4](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.3...v0.1.0-beta.4) (2026-11-11)
+
+
+### Features
+
+* mark find matches and open the link at the current match ([#17](https://github.com/engineersamuel/webskiff/issues/17)) ([8834f13](https://github.com/engineersamuel/webskiff/commit/8834f133cf1f30b4bc3d8d82174fe78b47b7286e))
+
+
+### Bug Fixes
+
+* publish source previews through draft-aware release lookup ([#12](https://github.com/engineersamuel/webskiff/issues/12)) ([f58dcc2](https://github.com/engineersamuel/webskiff/commit/f58dcc2d4a7cc6ad2e04354fb0dd2fbe4d7dfe06))
+
 ## [0.1.0-beta.3](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.2...v0.1.0-beta.3) (2026-11-11)
 
 
