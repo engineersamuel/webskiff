@@ -39,6 +39,10 @@ pub enum Msg {
     WindowOpen { view: View },
     Dialog { tab: u64, dialog: Dialog },
     Hints { tab: u64, json: Result<String, String> },
+    /// Hints read ahead (hints.js `__zwebHopPrepare()`).
+    Prepared { tab: u64, json: String },
+    /// The hint overlay for the typed letters, as a base64 PNG.
+    HintImage { tab: u64, png: String },
     Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
     Focused { ok: bool },
     Extents { tab: u64, json: Option<String> },
@@ -133,6 +137,28 @@ struct Hint {
     edit: bool,
 }
 
+/// hints.js's result, a JSON string of JSON: its id, overlay PNG and hints.
+fn parse_hints(json: &str) -> (Option<String>, Option<String>, Vec<Hint>) {
+    let mut v: serde_json::Value =
+        serde_json::from_str::<String>(json).ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    let list = if v.is_array() { v.take() } else { v["list"].take() };
+    let hints = list
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .map(|h| Hint {
+                    key: h["k"].as_str().unwrap_or("").into(),
+                    x: h["x"].as_f64().unwrap_or(0.0) as f32,
+                    y: h["y"].as_f64().unwrap_or(0.0) as f32,
+                    href: h["href"].as_str().map(Into::into),
+                    edit: h["edit"].as_bool().unwrap_or(false),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (v["id"].as_str().map(String::from), v["png"].as_str().map(String::from), hints)
+}
+
 pub struct Options {
     pub scale: Option<u32>,
     /// Images as flat placeholders of the same size (key I toggles).
@@ -158,6 +184,8 @@ pub struct App {
     mode: Mode,
     prompt: Option<Prompt>,
     hints: Vec<Hint>,
+    /// Hints read ahead for a tab: its id, hints.js's id, the overlay, the hints.
+    prepared: Option<(u64, String, String, Vec<Hint>)>,
     hint_typed: String,
     hint_new_tab: bool,
     find: String,
@@ -197,6 +225,7 @@ impl App {
             mode: Mode::Browse,
             prompt: None,
             hints: Vec::new(),
+            prepared: None,
             hint_typed: String::new(),
             hint_new_tab: false,
             find: String::new(),
@@ -247,6 +276,11 @@ impl App {
             t.view.set_size(css_w, css_h, self.scale as f32);
         }
         self.renderer.clear_all();
+        // The hint overlay was removed with every image, and its places are old.
+        if self.mode == Mode::Hint {
+            self.mode = Mode::Browse;
+            self.clear_hints();
+        }
         if let Some(t) = self.tabs.get(self.active) {
             t.view.request_frame();
         }
@@ -390,8 +424,14 @@ impl App {
             }
             Msg::Dialog { tab, dialog } => self.dialog_opened(tab, dialog),
             Msg::Hints { tab, json } => self.hints_received(tab, json),
+            Msg::HintImage { tab, png } => {
+                if self.index_of(tab) == Some(self.active) && self.mode == Mode::Hint {
+                    self.renderer.hop(png);
+                }
+            }
             Msg::Found { tab, generation, query, result } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
+            Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
             Msg::Focused { ok } => self.focused(ok),
             Msg::Tick => self.tick(),
@@ -443,9 +483,13 @@ impl App {
             return;
         }
         tab.url = url;
+        if self.prepared.as_ref().is_some_and(|p| p.0 == tab.id) {
+            self.prepared = None;
+        }
         if i == self.active {
             if self.mode == Mode::Hint {
                 self.mode = Mode::Browse;
+                self.renderer.hop(String::new());
             }
             self.renderer.forget();
             self.extents = None;
@@ -516,33 +560,44 @@ impl App {
         if self.index_of(tab) != Some(self.active) || self.mode != Mode::Hint {
             return;
         }
-        // A JSON string of the JSON list (hints.js).
-        let list: Vec<serde_json::Value> = json
-            .ok()
-            .and_then(|j| serde_json::from_str::<String>(&j).ok())
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_default();
-        self.hints = list
-            .iter()
-            .map(|h| Hint {
-                key: h["k"].as_str().unwrap_or("").into(),
-                x: h["x"].as_f64().unwrap_or(0.0) as f32,
-                y: h["y"].as_f64().unwrap_or(0.0) as f32,
-                href: h["href"].as_str().map(Into::into),
-                edit: h["edit"].as_bool().unwrap_or(false),
-            })
-            .collect();
+        // A JSON string of the JSON list, of {png, list}, or of {id}: the
+        // hints read ahead are still right (hints.js).
+        let v = json.ok().map(|j| parse_hints(&j)).unwrap_or_default();
+        let prepared = self.prepared.take().filter(|p| p.0 == tab && v.0.as_deref() == Some(p.1.as_str()));
+        let png = match prepared {
+            Some((_, _, png, hints)) => {
+                self.hints = hints;
+                Some(png)
+            }
+            None => {
+                self.hints = v.2;
+                v.1
+            }
+        };
         if self.hints.is_empty() {
             self.mode = Mode::Browse;
             self.message = "no links here".into();
+        } else if let Some(png) = png {
+            self.renderer.hop(png);
         }
         self.draw();
     }
 
     fn prepare_hints(&self, gen: u64) {
         if gen == self.prep_gen && self.mode == Mode::Browse && !self.tabs.is_empty() {
-            let lib = HINTS_JS.split("\nJSON.stringify").next().unwrap_or("");
-            self.view().evaluate(&format!("{lib};__zwebHopPrepare()"), |_| {});
+            let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
+            let tab = self.tab().id;
+            self.view().evaluate(&format!("{}{lib};__zwebHopPrepare()", self.hints_mode()), move |r| {
+                if let Ok(json) = r {
+                    send(Msg::Prepared { tab, json });
+                }
+            });
+        }
+    }
+
+    fn hints_prepared(&mut self, tab: u64, json: &str) {
+        if let (Some(id), Some(png), hints) = parse_hints(json) {
+            self.prepared = Some((tab, id, png, hints));
         }
     }
 
@@ -950,10 +1005,21 @@ impl App {
         self.hint_typed.clear();
         self.hints.clear();
         let id = self.tab().id;
-        self.view().evaluate(HINTS_JS, move |r| send(Msg::Hints { tab: id, json: r.map_err(|e| e.to_string()) }));
+        let kept = self.prepared.as_ref().filter(|p| p.0 == id).map_or("", |p| p.1.as_str());
+        let js = format!("{}window.__zwebHopKept={};{HINTS_JS}", self.hints_mode(), serde_json::to_string(kept).unwrap());
+        self.view().evaluate(&js, move |r| send(Msg::Hints { tab: id, json: r.map_err(|e| e.to_string()) }));
+    }
+
+    /// With Kitty graphics, hints.js gives the overlay as a terminal image:
+    /// showing it needs no new page frame.
+    fn hints_mode(&self) -> &'static str {
+        if self.renderer.gfx == crate::render::Gfx::Blocks { "" } else { "window.__zwebHopImage=true;" }
     }
 
     fn clear_hints(&mut self) {
+        if !self.hints.is_empty() {
+            self.renderer.hop(String::new());
+        }
         self.hints.clear();
         self.hint_typed.clear();
         if let Some(t) = self.tabs.get(self.active) {
@@ -965,7 +1031,12 @@ impl App {
     /// Keeps the codes that start with `typed`, showing what is left of them.
     fn show_hints(&self, typed: &str) {
         let js = format!("window.__zwebHop && __zwebHop.show({})", serde_json::to_string(typed).unwrap());
-        self.view().evaluate(&js, |_| {});
+        let id = self.tab().id;
+        self.view().evaluate(&js, move |r| {
+            if let Some(png) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
+                send(Msg::HintImage { tab: id, png });
+            }
+        });
     }
 
     fn edit_hint(&mut self, k: KeyEvent) {
@@ -1318,6 +1389,10 @@ impl App {
     }
 
     fn show_help(&mut self) {
+        if self.mode == Mode::Hint {
+            self.mode = Mode::Browse;
+            self.clear_hints();
+        }
         self.help = true;
         self.help_offset = 0;
         self.pending_key = None;

@@ -63,6 +63,8 @@ struct Pending {
     /// Forget what was learned of the page (new page, other tab).
     forget: bool,
     clear_popup: bool,
+    /// The hint overlay: a base64 PNG to show over the page, or "" to remove it.
+    hop: Option<String>,
     clear_all: bool,
     stop: bool,
 }
@@ -78,6 +80,8 @@ pub struct Renderer {
 }
 
 const POPUP_ID: u32 = 1;
+/// The hint overlay, over the page and its popup.
+const HOP_ID: u32 = 3;
 /// After this long with no new frame, photo tiles sent blurry are sent sharp.
 const REFINE_AFTER: Duration = Duration::from_millis(120);
 
@@ -337,6 +341,8 @@ struct Rows {
     refine: HashMap<u64, (usize, usize, Vec<u8>, String)>,
     /// When the last page frame was drawn.
     drawn_at: Instant,
+    /// Hash of the hint overlay the terminal holds: shown again, it is only placed.
+    hop_sent: Option<u64>,
 }
 
 impl Rows {
@@ -358,6 +364,7 @@ impl Rows {
             tape: Tape::default(),
             refine: HashMap::new(),
             drawn_at: Instant::now(),
+            hop_sent: None,
         }
     }
 
@@ -371,6 +378,7 @@ impl Rows {
         self.bg_sent = None;
         self.tape.clear();
         self.refine.clear();
+        self.hop_sent = None;
     }
 
     /// The cell row, first column and width in columns of tile `t`.
@@ -490,6 +498,32 @@ impl Rows {
         part
     }
 
+    /// The hint overlay, a base64 PNG, scaled to the page's cells; "" removes
+    /// its placement. The terminal keeps the image: the same one shown again
+    /// is only placed.
+    fn hop(&mut self, out: &mut Vec<u8>, layout: &Layout, png: &str) {
+        if png.is_empty() || layout.cols == 0 || layout.rows == 0 {
+            out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={HOP_ID},q=2\x1b\\").as_bytes());
+            return;
+        }
+        out.extend_from_slice(format!("\x1b[{};1H", layout.top + 1).as_bytes());
+        let place = format!("i={HOP_ID},p=1,c={},r={},C=1,q=2,z=2", layout.cols, layout.rows);
+        let hash = xxhash_rust::xxh3::xxh3_64(png.as_bytes());
+        if self.hop_sent == Some(hash) {
+            out.extend_from_slice(format!("\x1b_Ga=p,{place}\x1b\\").as_bytes());
+            return;
+        }
+        self.hop_sent = Some(hash);
+        let chunks: Vec<&[u8]> = png.as_bytes().chunks(4096).collect();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let m = u8::from(i + 1 < chunks.len());
+            let head = if i == 0 { format!("a=T,f=100,{place},m={m}") } else { format!("m={m},q=2") };
+            out.extend_from_slice(format!("\x1b_G{head};").as_bytes());
+            out.extend_from_slice(chunk);
+            out.extend_from_slice(b"\x1b\\");
+        }
+    }
+
     fn evict(&mut self, out: &mut Vec<u8>) {
         if self.bytes <= CACHE_BYTES || self.prediction.is_some() {
             return;
@@ -538,6 +572,7 @@ impl Pending {
             || !self.text.is_empty()
             || self.predict != 0
             || self.clear_popup
+            || self.hop.is_some()
             || self.clear_all
             || self.forget
             || self.stop
@@ -586,6 +621,12 @@ impl Renderer {
         self.wake.notify_one();
     }
 
+    /// Shows the hint overlay (a base64 PNG) over the page; "" removes it.
+    pub fn hop(&self, png: String) {
+        self.pending.lock().unwrap().hop = Some(png);
+        self.wake.notify_one();
+    }
+
     pub fn clear_popup(&self) {
         self.pending.lock().unwrap().clear_popup = true;
         self.wake.notify_one();
@@ -600,6 +641,7 @@ impl Renderer {
         p.popup = None;
         p.text.clear();
         p.predict = 0;
+        p.hop = None;
         self.wake.notify_one();
     }
 
@@ -687,10 +729,18 @@ impl Renderer {
         if pending.predict != 0 && self.gfx != Gfx::Blocks {
             self.show_prediction(&mut out, layout, rows, pending.predict);
         }
+        // Not over the help screen.
+        let hop_png = pending.hop.as_deref().filter(|png| self.gfx != Gfx::Blocks && (png.is_empty() || !layout.hidden));
+        if let Some(png) = hop_png {
+            rows.hop(&mut out, layout, png);
+        }
         if !out.is_empty() {
             write_out(&out);
             if pending.predict != 0 {
                 crate::trace!("predict written {}", pending.predict);
+            }
+            if hop_png.is_some_and(|png| !png.is_empty()) {
+                crate::trace!("hints written");
             }
         }
     }

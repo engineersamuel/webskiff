@@ -5,18 +5,42 @@
 // Returns one JSON string: [{k, x, y, href, edit}], (x, y) the element's
 // centre in viewport CSS pixels.
 //
-// The reading part (targets, character boxes, fonts, colours) only reads the
-// page: zweb runs it ahead, when the page is still (`__zwebHopPrepare()`),
-// and `f` then only draws, unless the page moved or changed since.
+// The overlay is one canvas. With `window.__zwebHopImage` set (Kitty
+// graphics), it is not put in the page: the result is {id, png, list}, the
+// canvas as a PNG for zweb to show as a terminal image over the page, and
+// `show(typed)` returns the new PNG. Chromium then draws nothing, and no page
+// tiles change. Without it, the canvas goes in the page.
+//
+// All the work (targets, character boxes, fonts, colours, the overlay, the
+// PNG) is done ahead, when the page is still: `__zwebHopPrepare()` returns
+// that result (the PNG made in Chromium's idle time, so keys do not wait for
+// it), and zweb keeps it, and says so in `__zwebHopKept`. `f` then returns
+// only {id} while that is still right: the page did not move, and did not
+// change, or changed but its hints read again are the same.
 window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
   let changed = true;
   new MutationObserver(() => { changed = true; })
     .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   const stamp = () => [scrollX, scrollY, innerWidth, innerHeight].join();
-  let ready = null;
-  const prepare = () => { ready = scan(); ready.stamp = stamp(); changed = false; };
+  let ready = null, id = 0;
+  const prepare = () => {
+    const r = ready = build(scan());
+    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
+    if (!window.__zwebHopImage) return null;
+    return new Promise(done => r.root.toBlob(blob => {
+      const read = new FileReader();
+      read.onload = () => {
+        r.png = read.result.slice(read.result.indexOf(',') + 1);
+        done(JSON.stringify({ id: r.id, png: r.png, list: r.list }));
+      };
+      read.readAsDataURL(blob);
+    }, 'image/png'));
+  };
   prepare.take = () => {
-    const r = ready && !changed && ready.stamp === stamp() ? ready : scan();
+    let r = ready && ready.stamp === stamp() ? ready : null;
+    const sc = r && !changed ? null : scan();
+    if (sc && !(r && sc.sig === r.sig)) r = build(sc);
+    if (window.__zwebHopImage && !r.png) r.png = png(r.root);
     ready = null;
     return r;
   };
@@ -88,59 +112,78 @@ function scan() {
       size: Math.round(h * 0.8) + 'px', family: '-apple-system, sans-serif', bg: bgOf(f.e) || pageBg };
   });
 
-  return { found, codes, spots, pageBg, colors, dimmed };
-}
-})();
-
-JSON.stringify((() => {
-  if (window.__zwebHop) window.__zwebHop.clear();
-  const { found, codes, spots, pageBg, colors, dimmed } = window.__zwebHopPrepare.take();
-  const DIM = 0.6;
-  const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
-  const root = document.createElement('div');
-  root.style.cssText = 'all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647;contain:strict';
-  const dim = document.createElement('div');
-  dim.style.cssText = `position:fixed;inset:0;background:${rgb(pageBg)};opacity:${DIM}`;
-  root.appendChild(dim);
-  const layer = document.createElement('div');
-  root.appendChild(layer);
-  document.documentElement.appendChild(root);
-
-  // One box a target, over its first characters: as wide as the code, and
-  // then to the end of the last character it reaches, so none shows in part.
-  // Styles set through the DOM: font names hold quotes.
-  const measure = document.createElement('canvas').getContext('2d');
-  const show = typed => {
-    const out = document.createDocumentFragment();
-    codes.forEach((code, i) => {
-      if (!code.startsWith(typed)) return;
-      const rest = code.slice(typed.length), sp = spots[i], c0 = sp.chars[0];
-      measure.font = `700 ${sp.size} ${sp.family}`;
-      const right = c0.l + measure.measureText(rest).width;
-      const reached = sp.chars.filter(c => c.l < right - 0.5 && Math.abs(c.t - c0.t) < c0.h / 2);
-      const end = Math.max(right, ...reached.map(c => c.l + c.w));
-      const box = document.createElement('span');
-      Object.assign(box.style, {
-        position: 'fixed', left: c0.l + 'px', top: c0.t + 'px', width: end - c0.l + 'px', height: c0.h + 'px',
-        font: `700 ${sp.size}/${c0.h}px ${sp.family}`, background: dimmed(sp.bg), whiteSpace: 'pre',
-      });
-      [...rest].forEach((ch, j) => {
-        const letter = document.createElement('span');
-        letter.textContent = ch;
-        letter.style.color = colors[Math.min(j, 2)];
-        box.appendChild(letter);
-      });
-      out.appendChild(box);
-    });
-    layer.replaceChildren(out);
-  };
-  window.__zwebHop = { show, clear: () => { root.remove(); delete window.__zwebHop; } };
-  show('');
-
-  return found.map((f, i) => {
+  const list = found.map((f, i) => {
     const tag = f.e.tagName;
     const edit = f.e.isContentEditable || tag === 'TEXTAREA' ||
       (tag === 'INPUT' && !/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(f.e.type));
     return { k: codes[i], x: f.x, y: f.y, href: f.e.href && f.e.href.length < 2048 ? f.e.href : null, edit };
   });
-})())
+  // All that the overlay and the result are made of.
+  const sig = JSON.stringify([list, spots, pageBg]);
+  return { list, codes, spots, pageBg, colors, dimmed, sig };
+}
+
+// The overlay, not attached, with the codes all shown, and the result.
+function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
+  const DIM = 0.6;
+  const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
+  const vw = innerWidth, vh = innerHeight, px = devicePixelRatio || 1;
+  const root = document.createElement('canvas');
+  root.width = Math.round(vw * px); root.height = Math.round(vh * px);
+  root.style.cssText = `all:initial;position:fixed;left:0;top:0;width:${vw}px;height:${vh}px;` +
+    'pointer-events:none;z-index:2147483647';
+  const g = root.getContext('2d');
+  g.scale(px, px);
+
+  // One box a target, over its first characters: as wide as the code, and
+  // then to the end of the last character it reaches, so none shows in part.
+  // The code sits on the line as the page's own text would.
+  const fonts = spots.map(sp => `700 ${sp.size} ${sp.family}`);
+  const backs = spots.map(sp => dimmed(sp.bg));
+  const show = typed => {
+    g.clearRect(0, 0, vw, vh);
+    g.globalAlpha = DIM; g.fillStyle = rgb(pageBg); g.fillRect(0, 0, vw, vh); g.globalAlpha = 1;
+    let font = null;
+    codes.forEach((code, i) => {
+      if (!code.startsWith(typed)) return;
+      const rest = code.slice(typed.length), sp = spots[i], c0 = sp.chars[0];
+      if (font !== fonts[i]) g.font = font = fonts[i];
+      const m = g.measureText(rest);
+      const right = c0.l + m.width;
+      let end = right;
+      for (const c of sp.chars) {
+        if (c.l < right - 0.5 && Math.abs(c.t - c0.t) < c0.h / 2) end = Math.max(end, c.l + c.w);
+      }
+      g.fillStyle = backs[i];
+      g.fillRect(c0.l, c0.t, end - c0.l, c0.h);
+      const asc = m.fontBoundingBoxAscent, base = c0.t + (c0.h - asc - m.fontBoundingBoxDescent) / 2 + asc;
+      let x = c0.l;
+      for (let j = 0; j < rest.length; j++) {
+        g.fillStyle = colors[Math.min(j, 2)];
+        g.fillText(rest[j], x, base);
+        x += g.measureText(rest[j]).width;
+      }
+    });
+  };
+  show('');
+
+  if (!window.__zwebHopImage) return { root, show, list, sig };
+  return { root, show: typed => (show(typed), png(root)), list, sig };
+}
+
+function png(canvas) {
+  return canvas.toDataURL('image/png').slice('data:image/png;base64,'.length);
+}
+})();
+
+(() => {
+  if (window.__zwebHop) window.__zwebHop.clear();
+  const { root, show, list, png, id } = window.__zwebHopPrepare.take();
+  if (png) {
+    window.__zwebHop = { show, clear: () => { delete window.__zwebHop; } };
+    return JSON.stringify(id && id === window.__zwebHopKept ? { id } : { png, list });
+  }
+  document.documentElement.appendChild(root);
+  window.__zwebHop = { show, clear: () => { root.remove(); delete window.__zwebHop; } };
+  return JSON.stringify(list);
+})()
