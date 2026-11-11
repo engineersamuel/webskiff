@@ -45,6 +45,7 @@ else
 fi
 
 installed="$(webskiff --version)"
+printf '%s\n' "$installed"
 [[ "$installed" = "webskiff $version "* && "$installed" = *"$commit"* ]]
 brew style --formula engineersamuel/tap/webskiff
 brew audit --strict --formula engineersamuel/tap/webskiff

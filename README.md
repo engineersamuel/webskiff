@@ -12,7 +12,7 @@ Webskiff renders real web pages inside a graphics-capable terminal using
 [Zebkit](https://github.com/ikey4u/zebkit). JavaScript, forms, images, and tabs
 run in Chromium, not a text-only approximation.
 
-**Experimental preview.** The current version is `0.1.0-beta.1`.
+**Experimental preview.** Check your installed version with `webskiff --version`.
 Homebrew builds Webskiff from source; there is no prebuilt Webskiff release. Do not use this build
 for sensitive accounts or treat it as an approved company browser.
 Source repository: [engineersamuel/webskiff](https://github.com/engineersamuel/webskiff).

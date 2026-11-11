@@ -111,6 +111,11 @@ jobs:
           python-version: "3.13"
           version: "0.11.21"
           enable-cache: false
+      - name: Confirm release tag matches the source version
+        if: ${{ !inputs.verify-only }}
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: uv run --no-project python -I scripts/release.py check-tag "$RELEASE_TAG"
       - name: Generate the immutable source formula
         env:
           SOURCE_COMMIT: ${{ needs.plan.outputs.commit }}

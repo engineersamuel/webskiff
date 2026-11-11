@@ -13,7 +13,7 @@ and all 20 existing commits passed a local redacted Gitleaks scan before the
 visibility change. This scan is not a guarantee that every sensitive item is absent.
 Repository-local HTTPS Git
 authentication uses the GitHub CLI credential helper, not a stored token file.
-`PUBLIC_RELEASE_ENABLED=false` keeps public release jobs disabled.
+`PUBLIC_RELEASE_ENABLED=false` keeps public binary-release jobs disabled.
 The protected `release` environment requires approval from `engineersamuel`,
 allows only `v*` tags, and does not allow administrator bypass. Public visibility
 removed the previous plan restriction on these protections.
