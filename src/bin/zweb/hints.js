@@ -43,11 +43,10 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
     return r;
   };
   return prepare;
-function scan() {
+function targets(vw, vh) {
   const sel = 'a[href],button,input:not([type=hidden]),textarea,select,summary,label[for],' +
     '[onclick],[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],' +
     '[contenteditable=""],[contenteditable=true],[tabindex]:not([tabindex="-1"])';
-  const vw = innerWidth, vh = innerHeight;
   const found = [];
   for (const e of document.querySelectorAll(sel)) {
     const r = [...e.getClientRects()].find(r => r.width > 1 && r.height > 1);
@@ -59,7 +58,40 @@ function scan() {
     if (found.some(f => f.e.contains(e) && f.e.tagName === 'A')) continue;
     found.push({ e, r, x, y });
   }
+  return found;
+}
 
+function characterBoxes(node, start) {
+  const range = document.createRange();
+  const chars = [];
+  for (let j = start; j < node.data.length && chars.length < 8; j++) {
+    range.setStart(node, j); range.setEnd(node, j + 1);
+    const r = range.getBoundingClientRect();
+    if (r.width < 1) { if (chars.length) break; else continue; }
+    chars.push({ l: r.left, t: r.top, w: r.width, h: r.height });
+  }
+  return chars;
+}
+
+function hintSpot(f, vh, bgOf, pageBg) {
+  const walker = document.createTreeWalker(f.e, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walker.nextNode());) {
+    const i = n.data.search(/\S/);
+    if (i < 0) continue;
+    const chars = characterBoxes(n, i);
+    if (!chars.length || chars[0].t > vh || chars[0].t + chars[0].h < 0) continue;
+    const s = getComputedStyle(n.parentElement);
+    return { chars, size: s.fontSize, family: s.fontFamily, bg: bgOf(n.parentElement) || pageBg };
+  }
+  // No text (an icon, a field): at its top-left corner.
+  const h = Math.min(Math.max(f.r.height, 14), 18);
+  return { chars: [{ l: Math.max(f.r.left, 0), t: Math.max(f.r.top, 0), w: h * 0.62, h }],
+    size: Math.round(h * 0.8) + 'px', family: '-apple-system, sans-serif', bg: bgOf(f.e) || pageBg };
+}
+
+function scan() {
+  const vw = innerWidth, vh = innerHeight;
+  const found = targets(vw, vh);
   // Codes from hop's keys, prefix-free; the first targets in reading order
   // get one letter.
   const keys = 'asdghklqwertyuiopzxcvbnmfj';
@@ -87,28 +119,7 @@ function scan() {
   const dimmed = c => rgb(c.map((v, i) => v * (1 - DIM) + pageBg[i] * DIM));
 
   // Where each code goes: over the element's first visible characters.
-  const spots = found.map(f => {
-    const walker = document.createTreeWalker(f.e, NodeFilter.SHOW_TEXT);
-    for (let n; (n = walker.nextNode());) {
-      const i = n.data.search(/\S/);
-      if (i < 0) continue;
-      const range = document.createRange();
-      const chars = [];
-      for (let j = i; j < n.data.length && chars.length < 8; j++) {
-        range.setStart(n, j); range.setEnd(n, j + 1);
-        const r = range.getBoundingClientRect();
-        if (r.width < 1) { if (chars.length) break; else continue; }
-        chars.push({ l: r.left, t: r.top, w: r.width, h: r.height });
-      }
-      if (!chars.length || chars[0].t > vh || chars[0].t + chars[0].h < 0) continue;
-      const s = getComputedStyle(n.parentElement);
-      return { chars, size: s.fontSize, family: s.fontFamily, bg: bgOf(n.parentElement) || pageBg };
-    }
-    // No text (an icon, a field): at its top-left corner.
-    const h = Math.min(Math.max(f.r.height, 14), 18);
-    return { chars: [{ l: Math.max(f.r.left, 0), t: Math.max(f.r.top, 0), w: h * 0.62, h }],
-      size: Math.round(h * 0.8) + 'px', family: '-apple-system, sans-serif', bg: bgOf(f.e) || pageBg };
-  });
+  const spots = found.map(f => hintSpot(f, vh, bgOf, pageBg));
 
   const list = found.map((f, i) => {
     const tag = f.e.tagName;

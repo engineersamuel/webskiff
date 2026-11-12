@@ -30,6 +30,12 @@ const STEP_ROWS: f32 = 3.0;
 
 // ---- Messages: every callback queues one; `drain` handles them in order. ----
 
+pub enum HintReply {
+    Targets(Result<String, String>),
+    /// The hint overlay for the typed letters (hints.js `show`).
+    Image(String),
+}
+
 pub enum Msg {
     Term(Event),
     Load { tab: u64, event: LoadEvent, url: String },
@@ -38,11 +44,9 @@ pub enum Msg {
     Popup { tab: u64, rect: Option<(i32, i32, i32, i32)> },
     WindowOpen { view: View },
     Dialog { tab: u64, dialog: Dialog },
-    Hints { tab: u64, json: Result<String, String> },
+    Hints { tab: u64, reply: HintReply },
     /// Hints read ahead (hints.js `__zwebHopPrepare()`).
     Prepared { tab: u64, json: String },
-    /// The hint overlay for the typed letters (hints.js `show`).
-    HintImage { tab: u64, json: String },
     Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
     Focused { ok: bool },
     Extents { tab: u64, json: Option<String> },
@@ -445,19 +449,7 @@ impl App {
                 self.message = "opened a new tab".into();
             }
             Msg::Dialog { tab, dialog } => self.dialog_opened(tab, dialog),
-            Msg::Hints { tab, json } => self.hints_received(tab, json),
-            Msg::HintImage { tab, json } => {
-                if self.index_of(tab) == Some(self.active) && self.mode == Mode::Hint {
-                    let mut hop = serde_json::from_str(&json).ok().and_then(|v| parse_hop(&v));
-                    // Same dim layer as when the hints were shown.
-                    if let (Some(h), Some(dim)) = (hop.as_mut(), self.hint_dim) {
-                        h.dim = dim;
-                    }
-                    if hop.is_some() {
-                        self.renderer.hop(hop);
-                    }
-                }
-            }
+            Msg::Hints { tab, reply } => self.hint_reply_received(tab, reply),
             Msg::Found { tab, generation, query, result } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
             Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
@@ -584,6 +576,13 @@ impl App {
         self.draw();
     }
 
+    fn hint_reply_received(&mut self, tab: u64, reply: HintReply) {
+        match reply {
+            HintReply::Targets(json) => self.hints_received(tab, json),
+            HintReply::Image(json) => self.hint_image_received(tab, &json),
+        }
+    }
+
     fn hints_received(&mut self, tab: u64, json: Result<String, String>) {
         crate::trace!("hints result");
         if self.index_of(tab) != Some(self.active) || self.mode != Mode::Hint {
@@ -611,6 +610,19 @@ impl App {
             self.renderer.hop(Some(hop));
         }
         self.draw();
+    }
+
+    fn hint_image_received(&mut self, tab: u64, json: &str) {
+        if self.index_of(tab) == Some(self.active) && self.mode == Mode::Hint {
+            let mut hop = serde_json::from_str(json).ok().and_then(|v| parse_hop(&v));
+            // Same dim layer as when the hints were shown.
+            if let (Some(h), Some(dim)) = (hop.as_mut(), self.hint_dim) {
+                h.dim = dim;
+            }
+            if hop.is_some() {
+                self.renderer.hop(hop);
+            }
+        }
     }
 
     fn prepare_hints(&self, gen: u64) {
@@ -1044,7 +1056,7 @@ impl App {
         let id = self.tab().id;
         let kept = self.prepared.as_ref().filter(|p| p.0 == id).map_or("", |p| p.1.as_str());
         let js = format!("{}window.__zwebHopKept={};{HINTS_JS}", self.hints_mode(), serde_json::to_string(kept).unwrap());
-        self.view().evaluate(&js, move |r| send(Msg::Hints { tab: id, json: r.map_err(|e| e.to_string()) }));
+        self.view().evaluate(&js, move |r| send(Msg::Hints { tab: id, reply: HintReply::Targets(r.map_err(|e| e.to_string())) }));
     }
 
     /// With Kitty graphics, hints.js gives the overlay as a terminal image:
@@ -1076,7 +1088,7 @@ impl App {
         let id = self.tab().id;
         self.view().evaluate(&js, move |r| {
             if let Some(json) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
-                send(Msg::HintImage { tab: id, json });
+                send(Msg::Hints { tab: id, reply: HintReply::Image(json) });
             }
         });
     }
