@@ -131,7 +131,7 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
   // then to the end of the last character it reaches, so none shows in part.
   // The code sits on the line as the page's own text would.
   // `paint(g, i, rest)` draws it at its place in viewport CSS pixels.
-  const measure = document.createElement('canvas').getContext('2d');
+  const measure = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
   const fonts = spots.map(sp => `700 ${sp.size} ${sp.family}`);
   const backs = spots.map(sp => dimmed(sp.bg));
   const box = (i, rest) => {
@@ -179,7 +179,9 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
       }
       const canvas = document.createElement('canvas');
       canvas.width = width; canvas.height = Math.max(y + shelf, 1);
-      const g = canvas.getContext('2d');
+      // In memory, not on the GPU: the PNG is read back at once, and a GPU
+      // read back waits for the GPU (seconds where it is slow or stuck).
+      const g = canvas.getContext('2d', { willReadFrequently: true });
       for (const p of parts) {
         g.setTransform(px, 0, 0, px, p.x - p.c0 * cw * px, p.y - p.r0 * ch * px);
         g.save();
