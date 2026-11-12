@@ -450,7 +450,7 @@ def draft_release(repository, tag, directory):
         f"https://api.github.com/repos/{repository}/releases",
         json.dumps({
             "tag_name": tag, "name": f"Webskiff {version()}",
-            "draft": True, "prerelease": "-" in version(),
+            "draft": True, "prerelease": False,
             "body": (ROOT / "CHANGELOG.md").read_text(),
         }).encode(),
     )

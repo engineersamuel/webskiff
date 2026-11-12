@@ -191,7 +191,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(url, "https://api.github.com/repos/example/webskiff/releases")
         payload = json.loads(data)
         self.assertIs(payload["draft"], True)
-        self.assertIs(payload["prerelease"], True)
+        self.assertIs(payload["prerelease"], False)
         self.assertEqual(request.call_count, 6)
 
     def test_release_with_missing_targets_never_contacts_github(self):
