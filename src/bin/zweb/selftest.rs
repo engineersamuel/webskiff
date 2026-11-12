@@ -66,18 +66,16 @@ fn click(view: &View, x: f32, y: f32) {
 fn steps() -> Vec<(&'static str, Act, Check)> {
     vec![
         (
-            "cold hint fonts do not hold the page script queue",
+            "background hints do not hold the page script queue",
             Box::new(|_, v| {
                 let lib = HINTS_JS.split("\n(() => {").next().unwrap();
                 v.evaluate(&format!(r#"
-                    window.RealWorker = Worker;
-                    window.Worker = class extends RealWorker {{
-                        postMessage(data) {{ setTimeout(() => super.postMessage(data), 1000); }}
-                    }};
+                    window.hintSetTimeout = setTimeout;
+                    window.setTimeout = fn => hintSetTimeout(fn, 400);
                     window.__zwebHopGrid = [80, 30];
                     {lib}
                     window.hintPending = JSON.parse(__zwebHopPrepare()).pending;
-                    window.Worker = RealWorker;
+                    window.setTimeout = hintSetTimeout;
                 "#), |_| {});
                 v.evaluate(
                     "window.hintQueueFree = window.hintPending && JSON.parse(__zwebHopPrepare()).pending && innerHeight === 600",

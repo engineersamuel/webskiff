@@ -24,68 +24,55 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
   new MutationObserver(() => { changed = true; })
     .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   const stamp = () => [scrollX, scrollY, innerWidth, innerHeight].join();
-  let ready = null, id = 0, warming = null, warmError = null;
-  const warmFonts = new Set();
-  const warm = sc => {
-    if (warmError) throw warmError;
-    if (warming) return false;
-    const fonts = [...new Set(sc.spots.map(sp => `700 ${sp.size} ${sp.family}`))]
-      .filter(font => !warmFonts.has(font));
-    if (!fonts.length) return true;
-    // macOS's first canvas text can wait hundreds of ms for system fonts.
-    // Warm that shared font cache off the page thread, never in evaluate().
-    const source = `onmessage = ({data}) => {
-      const g = new OffscreenCanvas(32, 32).getContext('2d', {willReadFrequently:true});
-      for (const font of data) {
-        g.font = font;
-        for (const ch of 'asdghklqwertyuiopzxcvbnmfj') g.fillText(ch, 0, 24);
-        g.getImageData(0, 0, 32, 32);
-      }
-      postMessage(null);
-    }`;
-    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-    try {
-      const worker = warming = new Worker(url);
-      worker.onmessage = () => {
-        console.info('[DEBUG-firstf] warm done');
-        fonts.forEach(font => warmFonts.add(font));
-        worker.terminate(); warming = null;
-      };
-      worker.onerror = event => {
-        warmError = new Error(`hint font warm-up: ${event.message}`);
-        worker.terminate(); warming = null;
-      };
-      worker.postMessage(fonts);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    return false;
+  let ready = null, id = 0, pending = null;
+  const finish = work => {
+    let step;
+    do { step = work.next(); } while (!step.done);
+    return step.value;
   };
-  let pending = null;
-  const prepare = () => {
-    const sc = pending && !changed && pending.stamp === stamp() ? pending.sc : scan();
-    if (window.__zwebHopGrid && !warm(sc)) {
-      pending = { sc, stamp: stamp() }; changed = false;
-      return JSON.stringify({ pending: true });
+  const complete = r => {
+    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`;
+    if (r.atlas) r.png = png(r.atlas.canvas);
+    return r;
+  };
+  const advance = job => {
+    if (pending !== job) return;
+    if (changed || job.stamp !== stamp()) { pending = null; return; }
+    try {
+      const end = performance.now() + 1;
+      let step;
+      do { step = job.work.next(); } while (!step.done && performance.now() < end);
+      if (step.done) {
+        ready = job.result = complete(step.value);
+      } else {
+        setTimeout(() => advance(job), 0);
+      }
+    } catch (error) {
+      job.error = error;
     }
-    pending = null;
-    console.info('[DEBUG-firstf] build');
-    const r = ready = build(sc);
-    console.info('[DEBUG-firstf] built');
-    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
-    if (!r.atlas) return null;
-    // At once, not by toBlob: a page that draws no frames never calls it
-    // back, and zweb's later scripts would wait behind it.
-    r.png = png(r.atlas.canvas);
-    console.info('[DEBUG-firstf] png');
-    return JSON.stringify(r.result({ id: r.id }));
+  };
+  const prepare = () => {
+    if (pending && !changed && pending.stamp === stamp()) {
+      if (pending.error) throw pending.error;
+      if (!pending.result) return JSON.stringify({ pending: true });
+      const r = pending.result;
+      pending = null;
+      return r.atlas ? JSON.stringify(r.result({ id: r.id })) : null;
+    }
+    const job = pending = { work: build(scan()), stamp: stamp() };
+    ready = null;
+    changed = false;
+    // Never leave evaluate() waiting for cold canvas fonts. Yield between
+    // targets so find, focus and extents scripts can run during preparation.
+    setTimeout(() => advance(job), 0);
+    return JSON.stringify({ pending: true });
   };
   prepare.take = () => {
     let r = ready && ready.stamp === stamp() ? ready : null;
     const sc = r && !changed ? null : scan();
-    if (sc && !(r && sc.sig === r.sig)) r = build(sc);
+    if (sc && !(r && sc.sig === r.sig)) r = finish(build(sc));
     if (r.atlas && !r.png) r.png = png(r.atlas.canvas);
-    ready = null;
+    ready = pending = null;
     return r;
   };
   return prepare;
@@ -168,7 +155,7 @@ function scan() {
 }
 
 // The overlay with the codes all shown, and the result.
-function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
+function* build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
   const DIM = 0.75;
   const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
   const vw = innerWidth, vh = innerHeight, px = devicePixelRatio || 1;
@@ -183,9 +170,7 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
   const box = (i, rest) => {
     const sp = spots[i], c0 = sp.chars[0];
     measure.font = fonts[i];
-    console.info('[DEBUG-firstf] measure', fonts[i]);
     const right = c0.l + measure.measureText(rest).width;
-    console.info('[DEBUG-firstf] measured');
     let end = right;
     for (const c of sp.chars) {
       if (c.l < right - 0.5 && Math.abs(c.t - c0.t) < c0.h / 2) end = Math.max(end, c.l + c.w);
@@ -193,18 +178,15 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
     return { l: c0.l, t: c0.t, w: end - c0.l, h: c0.h };
   };
   const paint = (g, i, rest, b) => {
-    console.info('[DEBUG-firstf] paint');
     g.font = fonts[i];
     g.fillStyle = backs[i];
     g.fillRect(b.l, b.t, b.w, b.h);
     const m = g.measureText(rest);
-    console.info('[DEBUG-firstf] metrics');
     const asc = m.fontBoundingBoxAscent, base = b.t + (b.h - asc - m.fontBoundingBoxDescent) / 2 + asc;
     let x = b.l;
     for (let j = 0; j < rest.length; j++) {
       g.fillStyle = colors[Math.min(j, 2)];
       g.fillText(rest[j], x, base);
-      console.info('[DEBUG-firstf] filled');
       x += g.measureText(rest[j]).width;
     }
   };
@@ -214,14 +196,16 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
   if (grid) {
     // The atlas: each box in the whole cells it covers, packed in shelves.
     const [cols, rows] = grid, cw = vw / cols, ch = vh / rows;
-    const make = typed => {
-      const parts = left(typed).map(([i, rest]) => {
+    function* make(typed) {
+      const parts = [];
+      for (const [i, rest] of left(typed)) {
         const b = box(i, rest);
         const c0 = Math.max(Math.floor(b.l / cw), 0), c1 = Math.min(Math.ceil((b.l + b.w) / cw), cols);
         const r0 = Math.max(Math.floor(b.t / ch), 0), r1 = Math.min(Math.ceil((b.t + b.h) / ch), rows);
         const w = Math.max(Math.round((c1 - c0) * cw * px), 1), h = Math.max(Math.round((r1 - r0) * ch * px), 1);
-        return { i, rest, b, c0, r0, nc: Math.max(c1 - c0, 1), nr: Math.max(r1 - r0, 1), w, h };
-      });
+        parts.push({ i, rest, b, c0, r0, nc: Math.max(c1 - c0, 1), nr: Math.max(r1 - r0, 1), w, h });
+        yield;
+      }
       const width = Math.max(Math.ceil(vw * px), ...parts.map(p => p.w));
       let x = 0, y = 0, shelf = 0;
       for (const p of parts) {
@@ -239,16 +223,17 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
         g.beginPath(); g.rect(p.c0 * cw, p.r0 * ch, p.w / px, p.h / px); g.clip();
         paint(g, p.i, p.rest, p.b);
         g.restore();
+        yield;
       }
       return { canvas, cells: parts.map(p => [p.c0, p.r0, p.nc, p.nr, p.x, p.y, p.w, p.h]) };
     };
-    const atlas = make('');
+    const atlas = yield* make('');
     const dim = [...pageBg.map(Math.round), Math.round(DIM * 255)];
     const r = {
       atlas, list, sig,
       result: extra => Object.assign({ png: r.png, cells: atlas.cells, dim, list }, extra),
       show: typed => {
-        const a = make(typed);
+        const a = finish(make(typed));
         return { png: a.cells.length ? png(a.canvas) : '', cells: a.cells };
       },
     };
