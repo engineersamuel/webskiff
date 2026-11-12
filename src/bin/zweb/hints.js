@@ -47,6 +47,7 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
     try {
       const worker = warming = new Worker(url);
       worker.onmessage = () => {
+        console.info('[DEBUG-firstf] warm done');
         fonts.forEach(font => warmFonts.add(font));
         worker.terminate(); warming = null;
       };
@@ -68,12 +69,15 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
       return JSON.stringify({ pending: true });
     }
     pending = null;
+    console.info('[DEBUG-firstf] build');
     const r = ready = build(sc);
+    console.info('[DEBUG-firstf] built');
     r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
     if (!r.atlas) return null;
     // At once, not by toBlob: a page that draws no frames never calls it
     // back, and zweb's later scripts would wait behind it.
     r.png = png(r.atlas.canvas);
+    console.info('[DEBUG-firstf] png');
     return JSON.stringify(r.result({ id: r.id }));
   };
   prepare.take = () => {
@@ -179,7 +183,9 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
   const box = (i, rest) => {
     const sp = spots[i], c0 = sp.chars[0];
     measure.font = fonts[i];
+    console.info('[DEBUG-firstf] measure', fonts[i]);
     const right = c0.l + measure.measureText(rest).width;
+    console.info('[DEBUG-firstf] measured');
     let end = right;
     for (const c of sp.chars) {
       if (c.l < right - 0.5 && Math.abs(c.t - c0.t) < c0.h / 2) end = Math.max(end, c.l + c.w);
@@ -187,15 +193,18 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
     return { l: c0.l, t: c0.t, w: end - c0.l, h: c0.h };
   };
   const paint = (g, i, rest, b) => {
+    console.info('[DEBUG-firstf] paint');
     g.font = fonts[i];
     g.fillStyle = backs[i];
     g.fillRect(b.l, b.t, b.w, b.h);
     const m = g.measureText(rest);
+    console.info('[DEBUG-firstf] metrics');
     const asc = m.fontBoundingBoxAscent, base = b.t + (b.h - asc - m.fontBoundingBoxDescent) / 2 + asc;
     let x = b.l;
     for (let j = 0; j < rest.length; j++) {
       g.fillStyle = colors[Math.min(j, 2)];
       g.fillText(rest[j], x, base);
+      console.info('[DEBUG-firstf] filled');
       x += g.measureText(rest[j]).width;
     }
   };
