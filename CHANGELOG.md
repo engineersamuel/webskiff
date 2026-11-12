@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.0-beta.5](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.4...v0.1.0-beta.5) (2026-11-12)
+
+
+### Bug Fixes
+
+* retain the preparation generation across async replies ([0fa1347](https://github.com/engineersamuel/webskiff/commit/0fa13470ea9e80f519a2a9a625d735fe800cbaeb))
+
+
+### Performance Improvements
+
+* force worker glyph rasterization before preparing hints ([ecfeb33](https://github.com/engineersamuel/webskiff/commit/ecfeb33d1d19492c932ed4f40a197c26effc211a))
+* make hop hints (f) show in under 10 ms ([#22](https://github.com/engineersamuel/webskiff/issues/22)) ([ed695ab](https://github.com/engineersamuel/webskiff/commit/ed695ab461747d5b786387cce52da6efafbed562))
+* warm hint fonts off the page script queue ([9cee08f](https://github.com/engineersamuel/webskiff/commit/9cee08f3da1635ee00f62f11d1b095f5da8f2e66))
+* yield between background hint atlas operations ([ee7d9a8](https://github.com/engineersamuel/webskiff/commit/ee7d9a8bbbabcb6f76246a006bdee7cd2fb3bd97))
+
 ## [0.1.0-beta.4](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.3...v0.1.0-beta.4) (2026-11-11)
 
 
