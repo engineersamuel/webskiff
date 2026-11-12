@@ -40,7 +40,7 @@ pub enum Msg {
     Dialog { tab: u64, dialog: Dialog },
     Hints { tab: u64, json: Result<String, String> },
     /// Hints read ahead (hints.js `__zwebHopPrepare()`).
-    Prepared { tab: u64, gen: u64, json: String },
+    Prepared { tab: u64, json: String },
     /// The hint overlay for the typed letters (hints.js `show`).
     HintImage { tab: u64, json: String },
     Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
@@ -206,6 +206,8 @@ pub struct App {
     /// The dim layer's colour of the hints shown.
     hint_dim: Option<[u8; 4]>,
     hint_new_tab: bool,
+    /// Hints were shown in this session: read them ahead from now on.
+    hints_used: bool,
     find: String,
     find_generation: u64,
     message: String,
@@ -247,6 +249,7 @@ impl App {
             hint_typed: String::new(),
             hint_dim: None,
             hint_new_tab: false,
+            hints_used: false,
             find: String::new(),
             find_generation: 0,
             message,
@@ -457,7 +460,7 @@ impl App {
             }
             Msg::Found { tab, generation, query, result } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
-            Msg::Prepared { tab, gen, json } => self.hints_prepared(tab, gen, &json),
+            Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
             Msg::Focused { ok } => self.focused(ok),
             Msg::Tick => self.tick(),
@@ -611,33 +614,24 @@ impl App {
     }
 
     fn prepare_hints(&self, gen: u64) {
-        if self.renderer.gfx == crate::render::Gfx::Blocks || self.tabs.get(self.active).is_none_or(|t| t.loading) {
-            return;
-        }
-        if gen == self.prep_gen && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
+        // Only once hints were used: the canvas's first text can load fonts
+        // for long (over 300 ms on CI runners), and every page script after
+        // it waits. That cost then comes with the first `f`, as before. Not
+        // while a prompt or help is open: its page scripts wait behind this.
+        if gen == self.prep_gen && self.hints_used && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
             crate::trace!("hints prepare");
             self.view().evaluate(&format!("{}{lib};__zwebHopPrepare()", self.hints_mode()), move |r| {
                 crate::trace!("hints prepared {}", r.as_ref().map_or_else(|e| e.to_string(), |j| format!("{} B", j.len())));
                 if let Ok(json) = r {
-                    send(Msg::Prepared { tab, gen, json });
+                    send(Msg::Prepared { tab, json });
                 }
             });
         }
     }
 
-    fn hints_prepared(&mut self, tab: u64, gen: u64, json: &str) {
-        if gen != self.prep_gen || self.index_of(tab) != Some(self.active) {
-            return;
-        }
-        let pending = serde_json::from_str::<String>(json).ok()
-            .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
-            .is_some_and(|v| v["pending"] == true);
-        if pending {
-            zebkit::after(Duration::from_millis(16), move || send(Msg::Prepare { gen }));
-            return;
-        }
+    fn hints_prepared(&mut self, tab: u64, json: &str) {
         if let (Some(id), Some(hop), hints) = parse_hints(json) {
             self.prepared = Some((tab, id, hop, hints));
         }
@@ -1042,6 +1036,7 @@ impl App {
     // ---- Hints ----
 
     fn start_hints(&mut self, new_tab: bool) {
+        self.hints_used = true;
         self.mode = Mode::Hint;
         self.hint_new_tab = new_tab;
         self.hint_typed.clear();

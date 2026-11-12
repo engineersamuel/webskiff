@@ -24,55 +24,22 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
   new MutationObserver(() => { changed = true; })
     .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   const stamp = () => [scrollX, scrollY, innerWidth, innerHeight].join();
-  let ready = null, id = 0, pending = null;
-  const finish = work => {
-    let step;
-    do { step = work.next(); } while (!step.done);
-    return step.value;
-  };
-  const complete = r => {
-    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`;
-    if (r.atlas) r.png = png(r.atlas.canvas);
-    return r;
-  };
-  const advance = job => {
-    if (pending !== job) return;
-    if (changed || job.stamp !== stamp()) { pending = null; return; }
-    try {
-      const end = performance.now() + 1;
-      let step;
-      do { step = job.work.next(); } while (!step.done && performance.now() < end);
-      if (step.done) {
-        ready = job.result = complete(step.value);
-      } else {
-        setTimeout(() => advance(job), 0);
-      }
-    } catch (error) {
-      job.error = error;
-    }
-  };
+  let ready = null, id = 0;
   const prepare = () => {
-    if (pending && !changed && pending.stamp === stamp()) {
-      if (pending.error) throw pending.error;
-      if (!pending.result) return JSON.stringify({ pending: true });
-      const r = pending.result;
-      pending = null;
-      return r.atlas ? JSON.stringify(r.result({ id: r.id })) : null;
-    }
-    const job = pending = { work: build(scan()), stamp: stamp() };
-    ready = null;
-    changed = false;
-    // Never leave evaluate() waiting for cold canvas fonts. Yield between
-    // targets so find, focus and extents scripts can run during preparation.
-    setTimeout(() => advance(job), 0);
-    return JSON.stringify({ pending: true });
+    const r = ready = build(scan());
+    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
+    if (!r.atlas) return null;
+    // At once, not by toBlob: a page that draws no frames never calls it
+    // back, and zweb's later scripts would wait behind it.
+    r.png = png(r.atlas.canvas);
+    return JSON.stringify(r.result({ id: r.id }));
   };
   prepare.take = () => {
     let r = ready && ready.stamp === stamp() ? ready : null;
     const sc = r && !changed ? null : scan();
-    if (sc && !(r && sc.sig === r.sig)) r = finish(build(sc));
+    if (sc && !(r && sc.sig === r.sig)) r = build(sc);
     if (r.atlas && !r.png) r.png = png(r.atlas.canvas);
-    ready = pending = null;
+    ready = null;
     return r;
   };
   return prepare;
@@ -155,7 +122,7 @@ function scan() {
 }
 
 // The overlay with the codes all shown, and the result.
-function* build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
+function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
   const DIM = 0.75;
   const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
   const vw = innerWidth, vh = innerHeight, px = devicePixelRatio || 1;
@@ -196,16 +163,14 @@ function* build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
   if (grid) {
     // The atlas: each box in the whole cells it covers, packed in shelves.
     const [cols, rows] = grid, cw = vw / cols, ch = vh / rows;
-    function* make(typed) {
-      const parts = [];
-      for (const [i, rest] of left(typed)) {
+    const make = typed => {
+      const parts = left(typed).map(([i, rest]) => {
         const b = box(i, rest);
         const c0 = Math.max(Math.floor(b.l / cw), 0), c1 = Math.min(Math.ceil((b.l + b.w) / cw), cols);
         const r0 = Math.max(Math.floor(b.t / ch), 0), r1 = Math.min(Math.ceil((b.t + b.h) / ch), rows);
         const w = Math.max(Math.round((c1 - c0) * cw * px), 1), h = Math.max(Math.round((r1 - r0) * ch * px), 1);
-        parts.push({ i, rest, b, c0, r0, nc: Math.max(c1 - c0, 1), nr: Math.max(r1 - r0, 1), w, h });
-        yield;
-      }
+        return { i, rest, b, c0, r0, nc: Math.max(c1 - c0, 1), nr: Math.max(r1 - r0, 1), w, h };
+      });
       const width = Math.max(Math.ceil(vw * px), ...parts.map(p => p.w));
       let x = 0, y = 0, shelf = 0;
       for (const p of parts) {
@@ -223,17 +188,16 @@ function* build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
         g.beginPath(); g.rect(p.c0 * cw, p.r0 * ch, p.w / px, p.h / px); g.clip();
         paint(g, p.i, p.rest, p.b);
         g.restore();
-        yield;
       }
       return { canvas, cells: parts.map(p => [p.c0, p.r0, p.nc, p.nr, p.x, p.y, p.w, p.h]) };
     };
-    const atlas = yield* make('');
+    const atlas = make('');
     const dim = [...pageBg.map(Math.round), Math.round(DIM * 255)];
     const r = {
       atlas, list, sig,
       result: extra => Object.assign({ png: r.png, cells: atlas.cells, dim, list }, extra),
       show: typed => {
-        const a = finish(make(typed));
+        const a = make(typed);
         return { png: a.cells.length ? png(a.canvas) : '', cells: a.cells };
       },
     };
