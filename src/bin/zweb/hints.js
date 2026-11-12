@@ -16,8 +16,7 @@
 //
 // All the work (targets, character boxes, fonts, colours, the overlay, the
 // PNG) is done ahead, when the page is still: `__zwebHopPrepare()` returns
-// that result (the PNG made in Chromium's idle time, so keys do not wait for
-// it), and zweb keeps it, and says so in `__zwebHopKept`. `f` then returns
+// that result, and zweb keeps it, and says so in `__zwebHopKept`. `f` then returns
 // only {id} while that is still right: the page did not move, and did not
 // change, or changed but its hints read again are the same.
 window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
@@ -30,14 +29,10 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
     const r = ready = build(scan());
     r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
     if (!r.atlas) return null;
-    return new Promise(done => r.atlas.canvas.toBlob(blob => {
-      const read = new FileReader();
-      read.onload = () => {
-        r.png = read.result.slice(read.result.indexOf(',') + 1);
-        done(JSON.stringify(r.result({ id: r.id })));
-      };
-      read.readAsDataURL(blob);
-    }, 'image/png'));
+    // At once, not by toBlob: a page that draws no frames never calls it
+    // back, and zweb's later scripts would wait behind it.
+    r.png = png(r.atlas.canvas);
+    return JSON.stringify(r.result({ id: r.id }));
   };
   prepare.take = () => {
     let r = ready && ready.stamp === stamp() ? ready : null;
