@@ -24,9 +24,51 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
   new MutationObserver(() => { changed = true; })
     .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   const stamp = () => [scrollX, scrollY, innerWidth, innerHeight].join();
-  let ready = null, id = 0;
+  let ready = null, id = 0, warming = null, warmError = null;
+  const warmFonts = new Set();
+  const warm = sc => {
+    if (warmError) throw warmError;
+    if (warming) return false;
+    const fonts = [...new Set(sc.spots.map(sp => `700 ${sp.size} ${sp.family}`))]
+      .filter(font => !warmFonts.has(font));
+    if (!fonts.length) return true;
+    // macOS's first canvas text can wait hundreds of ms for system fonts.
+    // Warm that shared font cache off the page thread, never in evaluate().
+    const source = `onmessage = ({data}) => {
+      const g = new OffscreenCanvas(1, 1).getContext('2d', {willReadFrequently:true});
+      for (const font of data) {
+        g.font = font;
+        g.measureText('asdghklqwertyuiopzxcvbnmfj');
+        g.fillText('a', 0, 0);
+      }
+      postMessage(null);
+    }`;
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+    try {
+      const worker = warming = new Worker(url);
+      worker.onmessage = () => {
+        fonts.forEach(font => warmFonts.add(font));
+        worker.terminate(); warming = null;
+      };
+      worker.onerror = event => {
+        warmError = new Error(`hint font warm-up: ${event.message}`);
+        worker.terminate(); warming = null;
+      };
+      worker.postMessage(fonts);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    return false;
+  };
+  let pending = null;
   const prepare = () => {
-    const r = ready = build(scan());
+    const sc = pending && !changed && pending.stamp === stamp() ? pending.sc : scan();
+    if (window.__zwebHopGrid && !warm(sc)) {
+      pending = { sc, stamp: stamp() }; changed = false;
+      return JSON.stringify({ pending: true });
+    }
+    pending = null;
+    const r = ready = build(sc);
     r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
     if (!r.atlas) return null;
     // At once, not by toBlob: a page that draws no frames never calls it
