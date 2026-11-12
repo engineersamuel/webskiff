@@ -35,11 +35,11 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
     // macOS's first canvas text can wait hundreds of ms for system fonts.
     // Warm that shared font cache off the page thread, never in evaluate().
     const source = `onmessage = ({data}) => {
-      const g = new OffscreenCanvas(1, 1).getContext('2d', {willReadFrequently:true});
+      const g = new OffscreenCanvas(32, 32).getContext('2d', {willReadFrequently:true});
       for (const font of data) {
         g.font = font;
-        g.measureText('asdghklqwertyuiopzxcvbnmfj');
-        g.fillText('a', 0, 0);
+        for (const ch of 'asdghklqwertyuiopzxcvbnmfj') g.fillText(ch, 0, 24);
+        g.getImageData(0, 0, 32, 32);
       }
       postMessage(null);
     }`;

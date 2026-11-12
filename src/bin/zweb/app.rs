@@ -611,7 +611,7 @@ impl App {
     }
 
     fn prepare_hints(&self, gen: u64) {
-        if self.renderer.gfx == crate::render::Gfx::Blocks {
+        if self.renderer.gfx == crate::render::Gfx::Blocks || self.tabs.get(self.active).is_none_or(|t| t.loading) {
             return;
         }
         if gen == self.prep_gen && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {

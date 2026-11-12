@@ -43,6 +43,7 @@ def run(binary, scale):
         "<title>hint benchmark</title>"
         "<body style='font:18px sans-serif'>"
         + "<a href=%23>link</a> words " * 200
+        + "<p>scroll space</p>" * 80
     )
     page = "data:text/html;base64," + base64.b64encode(page.encode()).decode()
     with tempfile.TemporaryDirectory(prefix="webskiff-hints-") as home:
