@@ -617,6 +617,13 @@ impl App {
         if gen == self.prep_gen && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
+            if crate::trace::on() {
+                self.view().on_console(|message| {
+                    if message.contains("[DEBUG-firstf]") {
+                        crate::trace!("{message}");
+                    }
+                });
+            }
             crate::trace!("hints prepare");
             self.view().evaluate(&format!("{}{lib};__zwebHopPrepare()", self.hints_mode()), move |r| {
                 crate::trace!("hints prepared {}", r.as_ref().map_or_else(|e| e.to_string(), |j| format!("{} B", j.len())));
