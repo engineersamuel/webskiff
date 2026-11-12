@@ -26,15 +26,12 @@ window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
   const stamp = () => [scrollX, scrollY, innerWidth, innerHeight].join();
   let ready = null, id = 0;
   const prepare = () => {
-    const M = m => console.log('HOPDBG ' + m + ' ' + performance.now().toFixed(1));
-    M('start'); const sc0 = scan(); M('scanned ' + sc0.list.length);
-    window.__hopM = M;
-    const r = ready = build(sc0); M('built');
+    const r = ready = build(scan());
     r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
     if (!r.atlas) return null;
     // At once, not by toBlob: a page that draws no frames never calls it
     // back, and zweb's later scripts would wait behind it.
-    r.png = png(r.atlas.canvas); M('png ' + r.png.length);
+    r.png = png(r.atlas.canvas);
     return JSON.stringify(r.result({ id: r.id }));
   };
   prepare.take = () => {
@@ -180,7 +177,6 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
         if (x + p.w > width) { x = 0; y += shelf; shelf = 0; }
         p.x = x; p.y = y; x += p.w; shelf = Math.max(shelf, p.h);
       }
-      (window.__hopM || (() => {}))('packed ' + parts.length);
       const canvas = document.createElement('canvas');
       canvas.width = width; canvas.height = Math.max(y + shelf, 1);
       // In memory, not on the GPU: the PNG is read back at once, and a GPU
@@ -193,7 +189,6 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
         paint(g, p.i, p.rest, p.b);
         g.restore();
       }
-      (window.__hopM || (() => {}))('painted');
       return { canvas, cells: parts.map(p => [p.c0, p.r0, p.nc, p.nr, p.x, p.y, p.w, p.h]) };
     };
     const atlas = make('');

@@ -611,7 +611,10 @@ impl App {
     }
 
     fn prepare_hints(&self, gen: u64) {
-        if gen == self.prep_gen && self.mode == Mode::Browse && !self.tabs.is_empty() {
+        // Not while a prompt or help is open: its page scripts (find) would
+        // wait behind this one, which is slow where the canvas's first text
+        // loads fonts (seen on CI runners).
+        if gen == self.prep_gen && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
             crate::trace!("hints prepare");
@@ -1293,6 +1296,8 @@ impl App {
 
     fn prompt_done(&mut self, accept: bool) {
         let p = self.prompt.take().unwrap();
+        // Hints were not read ahead while it was open.
+        self.schedule_prepare();
         let text = p.input.text;
         match p.kind {
             PromptKind::Open | PromptKind::OpenTab if accept && !text.trim().is_empty() => {
@@ -1459,6 +1464,7 @@ impl App {
             Some(Action::Bottom) => self.help_offset = end,
             Some(Action::Cancel) => {
                 self.help = false;
+                self.schedule_prepare();
                 self.renderer.layout.lock().unwrap().hidden = false;
                 self.clear_page_area();
                 self.view().request_frame();
