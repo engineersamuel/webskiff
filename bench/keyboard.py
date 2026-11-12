@@ -36,6 +36,9 @@ pid, fd = pty.fork()
 if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 1920, 1280))
     os.environ["HOME"] = home.name
+    if args.check or args.check_only or args.config_check or args.enhanced_check:
+        # Stage times in the log printed on a failure; not for timing runs.
+        os.environ["ZWEB_TRACE"] = "1"
     os.execv(binary, [binary, "--gfx", "kitty", fixture])
 original_flags = termios.tcgetattr(fd)[3]
 
@@ -257,7 +260,8 @@ try:
 except AssertionError:
     log = Path(home.name) / ".cache/zweb/zweb.log"
     if log.exists():
-        print("BROWSER LOG:", repr(log.read_bytes()[-8000:]), flush=True)
+        lines = [line for line in log.read_bytes().splitlines() if b"XPC error" not in line]
+        print("BROWSER LOG:", repr(b"\n".join(lines)[-8000:]), flush=True)
     raise
 finally:
     try:

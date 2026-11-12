@@ -18,7 +18,7 @@ use zebkit::{LoadEvent, View};
 use crate::keys;
 use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::input::{self, Edit, TextInput};
-use crate::render::{Layout, Renderer};
+use crate::render::{Hop, Layout, Renderer};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
@@ -39,6 +39,10 @@ pub enum Msg {
     WindowOpen { view: View },
     Dialog { tab: u64, dialog: Dialog },
     Hints { tab: u64, json: Result<String, String> },
+    /// Hints read ahead (hints.js `__zwebHopPrepare()`).
+    Prepared { tab: u64, json: String },
+    /// The hint overlay for the typed letters (hints.js `show`).
+    HintImage { tab: u64, json: String },
     Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
     Focused { ok: bool },
     Extents { tab: u64, json: Option<String> },
@@ -133,6 +137,44 @@ struct Hint {
     edit: bool,
 }
 
+/// hints.js's result, a JSON string of JSON: its id, overlay and hints.
+fn parse_hints(json: &str) -> (Option<String>, Option<Hop>, Vec<Hint>) {
+    let mut v: serde_json::Value =
+        serde_json::from_str::<String>(json).ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    let hop = parse_hop(&v);
+    let list = if v.is_array() { v.take() } else { v["list"].take() };
+    let hints = list
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .map(|h| Hint {
+                    key: h["k"].as_str().unwrap_or("").into(),
+                    x: h["x"].as_f64().unwrap_or(0.0) as f32,
+                    y: h["y"].as_f64().unwrap_or(0.0) as f32,
+                    href: h["href"].as_str().map(Into::into),
+                    edit: h["edit"].as_bool().unwrap_or(false),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (v["id"].as_str().map(String::from), hop, hints)
+}
+
+/// The overlay in a hints.js result: {png, cells, dim}.
+fn parse_hop(v: &serde_json::Value) -> Option<Hop> {
+    let png = v["png"].as_str()?.to_string();
+    let num = |n: &serde_json::Value| n.as_f64().unwrap_or(0.0).max(0.0) as u32;
+    let cells = v["cells"].as_array()?.iter().filter_map(|c| {
+        let c = c.as_array().filter(|c| c.len() == 8)?;
+        Some(std::array::from_fn(|i| num(&c[i])))
+    });
+    let mut dim = [255, 255, 255, 191];
+    if let Some(d) = v["dim"].as_array().filter(|d| d.len() == 4) {
+        dim = std::array::from_fn(|i| num(&d[i]).min(255) as u8);
+    }
+    Some(Hop { png, cells: cells.collect(), dim })
+}
+
 pub struct Options {
     pub scale: Option<u32>,
     /// Images as flat placeholders of the same size (key I toggles).
@@ -158,8 +200,14 @@ pub struct App {
     mode: Mode,
     prompt: Option<Prompt>,
     hints: Vec<Hint>,
+    /// Hints read ahead for a tab: its id, hints.js's id, the overlay, the hints.
+    prepared: Option<(u64, String, Hop, Vec<Hint>)>,
     hint_typed: String,
+    /// The dim layer's colour of the hints shown.
+    hint_dim: Option<[u8; 4]>,
     hint_new_tab: bool,
+    /// Hints were shown in this session: read them ahead from now on.
+    hints_used: bool,
     find: String,
     find_generation: u64,
     message: String,
@@ -197,8 +245,11 @@ impl App {
             mode: Mode::Browse,
             prompt: None,
             hints: Vec::new(),
+            prepared: None,
             hint_typed: String::new(),
+            hint_dim: None,
             hint_new_tab: false,
+            hints_used: false,
             find: String::new(),
             find_generation: 0,
             message,
@@ -247,6 +298,11 @@ impl App {
             t.view.set_size(css_w, css_h, self.scale as f32);
         }
         self.renderer.clear_all();
+        // The hint overlay was removed with every image, and its places are old.
+        if self.mode == Mode::Hint {
+            self.mode = Mode::Browse;
+            self.clear_hints();
+        }
         if let Some(t) = self.tabs.get(self.active) {
             t.view.request_frame();
         }
@@ -390,8 +446,21 @@ impl App {
             }
             Msg::Dialog { tab, dialog } => self.dialog_opened(tab, dialog),
             Msg::Hints { tab, json } => self.hints_received(tab, json),
+            Msg::HintImage { tab, json } => {
+                if self.index_of(tab) == Some(self.active) && self.mode == Mode::Hint {
+                    let mut hop = serde_json::from_str(&json).ok().and_then(|v| parse_hop(&v));
+                    // Same dim layer as when the hints were shown.
+                    if let (Some(h), Some(dim)) = (hop.as_mut(), self.hint_dim) {
+                        h.dim = dim;
+                    }
+                    if hop.is_some() {
+                        self.renderer.hop(hop);
+                    }
+                }
+            }
             Msg::Found { tab, generation, query, result } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
+            Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
             Msg::Focused { ok } => self.focused(ok),
             Msg::Tick => self.tick(),
@@ -443,9 +512,13 @@ impl App {
             return;
         }
         tab.url = url;
+        if self.prepared.as_ref().is_some_and(|p| p.0 == tab.id) {
+            self.prepared = None;
+        }
         if i == self.active {
             if self.mode == Mode::Hint {
                 self.mode = Mode::Browse;
+                self.renderer.hop(None);
             }
             self.renderer.forget();
             self.extents = None;
@@ -516,33 +589,51 @@ impl App {
         if self.index_of(tab) != Some(self.active) || self.mode != Mode::Hint {
             return;
         }
-        // A JSON string of the JSON list (hints.js).
-        let list: Vec<serde_json::Value> = json
-            .ok()
-            .and_then(|j| serde_json::from_str::<String>(&j).ok())
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_default();
-        self.hints = list
-            .iter()
-            .map(|h| Hint {
-                key: h["k"].as_str().unwrap_or("").into(),
-                x: h["x"].as_f64().unwrap_or(0.0) as f32,
-                y: h["y"].as_f64().unwrap_or(0.0) as f32,
-                href: h["href"].as_str().map(Into::into),
-                edit: h["edit"].as_bool().unwrap_or(false),
-            })
-            .collect();
+        // A JSON string of the JSON list, of {png, list}, or of {id}: the
+        // hints read ahead are still right (hints.js).
+        let v = json.ok().map(|j| parse_hints(&j)).unwrap_or_default();
+        let prepared = self.prepared.take().filter(|p| p.0 == tab && v.0.as_deref() == Some(p.1.as_str()));
+        let hop = match prepared {
+            Some((_, _, hop, hints)) => {
+                self.hints = hints;
+                Some(hop)
+            }
+            None => {
+                self.hints = v.2;
+                v.1
+            }
+        };
         if self.hints.is_empty() {
             self.mode = Mode::Browse;
             self.message = "no links here".into();
+        } else if let Some(hop) = hop {
+            self.hint_dim = Some(hop.dim);
+            self.renderer.hop(Some(hop));
         }
         self.draw();
     }
 
     fn prepare_hints(&self, gen: u64) {
-        if gen == self.prep_gen && self.mode == Mode::Browse && !self.tabs.is_empty() {
-            let lib = HINTS_JS.split("\nJSON.stringify").next().unwrap_or("");
-            self.view().evaluate(&format!("{lib};__zwebHopPrepare()"), |_| {});
+        // Only once hints were used: the canvas's first text can load fonts
+        // for long (over 300 ms on CI runners), and every page script after
+        // it waits. That cost then comes with the first `f`, as before. Not
+        // while a prompt or help is open: its page scripts wait behind this.
+        if gen == self.prep_gen && self.hints_used && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
+            let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
+            let tab = self.tab().id;
+            crate::trace!("hints prepare");
+            self.view().evaluate(&format!("{}{lib};__zwebHopPrepare()", self.hints_mode()), move |r| {
+                crate::trace!("hints prepared {}", r.as_ref().map_or_else(|e| e.to_string(), |j| format!("{} B", j.len())));
+                if let Ok(json) = r {
+                    send(Msg::Prepared { tab, json });
+                }
+            });
+        }
+    }
+
+    fn hints_prepared(&mut self, tab: u64, json: &str) {
+        if let (Some(id), Some(hop), hints) = parse_hints(json) {
+            self.prepared = Some((tab, id, hop, hints));
         }
     }
 
@@ -945,15 +1036,32 @@ impl App {
     // ---- Hints ----
 
     fn start_hints(&mut self, new_tab: bool) {
+        self.hints_used = true;
         self.mode = Mode::Hint;
         self.hint_new_tab = new_tab;
         self.hint_typed.clear();
         self.hints.clear();
         let id = self.tab().id;
-        self.view().evaluate(HINTS_JS, move |r| send(Msg::Hints { tab: id, json: r.map_err(|e| e.to_string()) }));
+        let kept = self.prepared.as_ref().filter(|p| p.0 == id).map_or("", |p| p.1.as_str());
+        let js = format!("{}window.__zwebHopKept={};{HINTS_JS}", self.hints_mode(), serde_json::to_string(kept).unwrap());
+        self.view().evaluate(&js, move |r| send(Msg::Hints { tab: id, json: r.map_err(|e| e.to_string()) }));
+    }
+
+    /// With Kitty graphics, hints.js gives the overlay as a terminal image:
+    /// showing it needs no new page frame.
+    fn hints_mode(&self) -> String {
+        if self.renderer.gfx == crate::render::Gfx::Blocks {
+            return String::new();
+        }
+        let l = self.layout();
+        format!("window.__zwebHopGrid=[{},{}];", l.cols, l.rows)
     }
 
     fn clear_hints(&mut self) {
+        if !self.hints.is_empty() {
+            self.renderer.hop(None);
+        }
+        self.hint_dim = None;
         self.hints.clear();
         self.hint_typed.clear();
         if let Some(t) = self.tabs.get(self.active) {
@@ -965,7 +1073,12 @@ impl App {
     /// Keeps the codes that start with `typed`, showing what is left of them.
     fn show_hints(&self, typed: &str) {
         let js = format!("window.__zwebHop && __zwebHop.show({})", serde_json::to_string(typed).unwrap());
-        self.view().evaluate(&js, |_| {});
+        let id = self.tab().id;
+        self.view().evaluate(&js, move |r| {
+            if let Some(json) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
+                send(Msg::HintImage { tab: id, json });
+            }
+        });
     }
 
     fn edit_hint(&mut self, k: KeyEvent) {
@@ -1188,6 +1301,8 @@ impl App {
 
     fn prompt_done(&mut self, accept: bool) {
         let p = self.prompt.take().unwrap();
+        // Hints were not read ahead while it was open.
+        self.schedule_prepare();
         let text = p.input.text;
         match p.kind {
             PromptKind::Open | PromptKind::OpenTab if accept && !text.trim().is_empty() => {
@@ -1318,6 +1433,10 @@ impl App {
     }
 
     fn show_help(&mut self) {
+        if self.mode == Mode::Hint {
+            self.mode = Mode::Browse;
+            self.clear_hints();
+        }
         self.help = true;
         self.help_offset = 0;
         self.pending_key = None;
@@ -1350,6 +1469,7 @@ impl App {
             Some(Action::Bottom) => self.help_offset = end,
             Some(Action::Cancel) => {
                 self.help = false;
+                self.schedule_prepare();
                 self.renderer.layout.lock().unwrap().hidden = false;
                 self.clear_page_area();
                 self.view().request_frame();

@@ -5,18 +5,40 @@
 // Returns one JSON string: [{k, x, y, href, edit}], (x, y) the element's
 // centre in viewport CSS pixels.
 //
-// The reading part (targets, character boxes, fonts, colours) only reads the
-// page: zweb runs it ahead, when the page is still (`__zwebHopPrepare()`),
-// and `f` then only draws, unless the page moved or changed since.
+// With `window.__zwebHopGrid = [cols, rows]` set (Kitty graphics), nothing
+// goes in the page: zweb shows the hints as terminal images over it, a dim
+// layer and one small PNG "atlas" of the code boxes. Each box is cut to the
+// whole cells it covers, see-through around the box, and `cells` says where:
+// [col, row, cols, rows, x, y, w, h], (x, y, w, h) its pixels in the atlas.
+// The result is {id, png, cells, dim, list}; `show(typed)` returns
+// {png, cells} of the boxes left. Chromium then draws nothing, and no page
+// tiles change. Without it, the overlay is one canvas in the page.
+//
+// All the work (targets, character boxes, fonts, colours, the overlay, the
+// PNG) is done ahead, when the page is still: `__zwebHopPrepare()` returns
+// that result, and zweb keeps it, and says so in `__zwebHopKept`. `f` then returns
+// only {id} while that is still right: the page did not move, and did not
+// change, or changed but its hints read again are the same.
 window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
   let changed = true;
   new MutationObserver(() => { changed = true; })
     .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   const stamp = () => [scrollX, scrollY, innerWidth, innerHeight].join();
-  let ready = null;
-  const prepare = () => { ready = scan(); ready.stamp = stamp(); changed = false; };
+  let ready = null, id = 0;
+  const prepare = () => {
+    const r = ready = build(scan());
+    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
+    if (!r.atlas) return null;
+    // At once, not by toBlob: a page that draws no frames never calls it
+    // back, and zweb's later scripts would wait behind it.
+    r.png = png(r.atlas.canvas);
+    return JSON.stringify(r.result({ id: r.id }));
+  };
   prepare.take = () => {
-    const r = ready && !changed && ready.stamp === stamp() ? ready : scan();
+    let r = ready && ready.stamp === stamp() ? ready : null;
+    const sc = r && !changed ? null : scan();
+    if (sc && !(r && sc.sig === r.sig)) r = build(sc);
+    if (r.atlas && !r.png) r.png = png(r.atlas.canvas);
     ready = null;
     return r;
   };
@@ -60,7 +82,7 @@ function scan() {
   const pageBg = bgOf(document.body) || bgOf(document.documentElement) || [255, 255, 255];
   const dark = (0.299 * pageBg[0] + 0.587 * pageBg[1] + 0.114 * pageBg[2]) < 128;
   const colors = dark ? ['#ff007c', '#00dfff', '#2b8db3'] : ['#e0006b', '#0086a8', '#2b6f99'];
-  const DIM = 0.6;
+  const DIM = 0.75;
   const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
   const dimmed = c => rgb(c.map((v, i) => v * (1 - DIM) + pageBg[i] * DIM));
 
@@ -88,59 +110,130 @@ function scan() {
       size: Math.round(h * 0.8) + 'px', family: '-apple-system, sans-serif', bg: bgOf(f.e) || pageBg };
   });
 
-  return { found, codes, spots, pageBg, colors, dimmed };
-}
-})();
-
-JSON.stringify((() => {
-  if (window.__zwebHop) window.__zwebHop.clear();
-  const { found, codes, spots, pageBg, colors, dimmed } = window.__zwebHopPrepare.take();
-  const DIM = 0.6;
-  const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
-  const root = document.createElement('div');
-  root.style.cssText = 'all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647;contain:strict';
-  const dim = document.createElement('div');
-  dim.style.cssText = `position:fixed;inset:0;background:${rgb(pageBg)};opacity:${DIM}`;
-  root.appendChild(dim);
-  const layer = document.createElement('div');
-  root.appendChild(layer);
-  document.documentElement.appendChild(root);
-
-  // One box a target, over its first characters: as wide as the code, and
-  // then to the end of the last character it reaches, so none shows in part.
-  // Styles set through the DOM: font names hold quotes.
-  const measure = document.createElement('canvas').getContext('2d');
-  const show = typed => {
-    const out = document.createDocumentFragment();
-    codes.forEach((code, i) => {
-      if (!code.startsWith(typed)) return;
-      const rest = code.slice(typed.length), sp = spots[i], c0 = sp.chars[0];
-      measure.font = `700 ${sp.size} ${sp.family}`;
-      const right = c0.l + measure.measureText(rest).width;
-      const reached = sp.chars.filter(c => c.l < right - 0.5 && Math.abs(c.t - c0.t) < c0.h / 2);
-      const end = Math.max(right, ...reached.map(c => c.l + c.w));
-      const box = document.createElement('span');
-      Object.assign(box.style, {
-        position: 'fixed', left: c0.l + 'px', top: c0.t + 'px', width: end - c0.l + 'px', height: c0.h + 'px',
-        font: `700 ${sp.size}/${c0.h}px ${sp.family}`, background: dimmed(sp.bg), whiteSpace: 'pre',
-      });
-      [...rest].forEach((ch, j) => {
-        const letter = document.createElement('span');
-        letter.textContent = ch;
-        letter.style.color = colors[Math.min(j, 2)];
-        box.appendChild(letter);
-      });
-      out.appendChild(box);
-    });
-    layer.replaceChildren(out);
-  };
-  window.__zwebHop = { show, clear: () => { root.remove(); delete window.__zwebHop; } };
-  show('');
-
-  return found.map((f, i) => {
+  const list = found.map((f, i) => {
     const tag = f.e.tagName;
     const edit = f.e.isContentEditable || tag === 'TEXTAREA' ||
       (tag === 'INPUT' && !/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(f.e.type));
     return { k: codes[i], x: f.x, y: f.y, href: f.e.href && f.e.href.length < 2048 ? f.e.href : null, edit };
   });
-})())
+  // All that the overlay and the result are made of.
+  const sig = JSON.stringify([list, spots, pageBg]);
+  return { list, codes, spots, pageBg, colors, dimmed, sig };
+}
+
+// The overlay with the codes all shown, and the result.
+function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
+  const DIM = 0.75;
+  const rgb = c => `rgb(${c.map(Math.round).join(',')})`;
+  const vw = innerWidth, vh = innerHeight, px = devicePixelRatio || 1;
+
+  // One box a target, over its first characters: as wide as the code, and
+  // then to the end of the last character it reaches, so none shows in part.
+  // The code sits on the line as the page's own text would.
+  // `paint(g, i, rest)` draws it at its place in viewport CSS pixels.
+  const measure = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  const fonts = spots.map(sp => `700 ${sp.size} ${sp.family}`);
+  const backs = spots.map(sp => dimmed(sp.bg));
+  const box = (i, rest) => {
+    const sp = spots[i], c0 = sp.chars[0];
+    measure.font = fonts[i];
+    const right = c0.l + measure.measureText(rest).width;
+    let end = right;
+    for (const c of sp.chars) {
+      if (c.l < right - 0.5 && Math.abs(c.t - c0.t) < c0.h / 2) end = Math.max(end, c.l + c.w);
+    }
+    return { l: c0.l, t: c0.t, w: end - c0.l, h: c0.h };
+  };
+  const paint = (g, i, rest, b) => {
+    g.font = fonts[i];
+    g.fillStyle = backs[i];
+    g.fillRect(b.l, b.t, b.w, b.h);
+    const m = g.measureText(rest);
+    const asc = m.fontBoundingBoxAscent, base = b.t + (b.h - asc - m.fontBoundingBoxDescent) / 2 + asc;
+    let x = b.l;
+    for (let j = 0; j < rest.length; j++) {
+      g.fillStyle = colors[Math.min(j, 2)];
+      g.fillText(rest[j], x, base);
+      x += g.measureText(rest[j]).width;
+    }
+  };
+  const left = typed => codes.flatMap((code, i) => code.startsWith(typed) ? [[i, code.slice(typed.length)]] : []);
+
+  const grid = window.__zwebHopGrid;
+  if (grid) {
+    // The atlas: each box in the whole cells it covers, packed in shelves.
+    const [cols, rows] = grid, cw = vw / cols, ch = vh / rows;
+    const make = typed => {
+      const parts = left(typed).map(([i, rest]) => {
+        const b = box(i, rest);
+        const c0 = Math.max(Math.floor(b.l / cw), 0), c1 = Math.min(Math.ceil((b.l + b.w) / cw), cols);
+        const r0 = Math.max(Math.floor(b.t / ch), 0), r1 = Math.min(Math.ceil((b.t + b.h) / ch), rows);
+        const w = Math.max(Math.round((c1 - c0) * cw * px), 1), h = Math.max(Math.round((r1 - r0) * ch * px), 1);
+        return { i, rest, b, c0, r0, nc: Math.max(c1 - c0, 1), nr: Math.max(r1 - r0, 1), w, h };
+      });
+      const width = Math.max(Math.ceil(vw * px), ...parts.map(p => p.w));
+      let x = 0, y = 0, shelf = 0;
+      for (const p of parts) {
+        if (x + p.w > width) { x = 0; y += shelf; shelf = 0; }
+        p.x = x; p.y = y; x += p.w; shelf = Math.max(shelf, p.h);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = Math.max(y + shelf, 1);
+      // In memory, not on the GPU: the PNG is read back at once, and a GPU
+      // read back waits for the GPU (seconds where it is slow or stuck).
+      const g = canvas.getContext('2d', { willReadFrequently: true });
+      for (const p of parts) {
+        g.setTransform(px, 0, 0, px, p.x - p.c0 * cw * px, p.y - p.r0 * ch * px);
+        g.save();
+        g.beginPath(); g.rect(p.c0 * cw, p.r0 * ch, p.w / px, p.h / px); g.clip();
+        paint(g, p.i, p.rest, p.b);
+        g.restore();
+      }
+      return { canvas, cells: parts.map(p => [p.c0, p.r0, p.nc, p.nr, p.x, p.y, p.w, p.h]) };
+    };
+    const atlas = make('');
+    const dim = [...pageBg.map(Math.round), Math.round(DIM * 255)];
+    const r = {
+      atlas, list, sig,
+      result: extra => Object.assign({ png: r.png, cells: atlas.cells, dim, list }, extra),
+      show: typed => {
+        const a = make(typed);
+        return { png: a.cells.length ? png(a.canvas) : '', cells: a.cells };
+      },
+    };
+    return r;
+  }
+
+  // In the page: one canvas, dimmed, with the boxes.
+  const root = document.createElement('canvas');
+  root.width = Math.round(vw * px); root.height = Math.round(vh * px);
+  root.style.cssText = `all:initial;position:fixed;left:0;top:0;width:${vw}px;height:${vh}px;` +
+    'pointer-events:none;z-index:2147483647';
+  const g = root.getContext('2d');
+  g.scale(px, px);
+  const show = typed => {
+    g.clearRect(0, 0, vw, vh);
+    g.globalAlpha = DIM; g.fillStyle = rgb(pageBg); g.fillRect(0, 0, vw, vh); g.globalAlpha = 1;
+    for (const [i, rest] of left(typed)) paint(g, i, rest, box(i, rest));
+  };
+  show('');
+  return { root, show, list, sig };
+}
+
+function png(canvas) {
+  return canvas.toDataURL('image/png').slice('data:image/png;base64,'.length);
+}
+})();
+
+(() => {
+  if (window.__zwebHop) window.__zwebHop.clear();
+  const r = window.__zwebHopPrepare.take();
+  const { root, show, list } = r;
+  if (r.atlas) {
+    window.__zwebHop = { show: typed => JSON.stringify(show(typed)), clear: () => { delete window.__zwebHop; } };
+    return JSON.stringify(r.id && r.id === window.__zwebHopKept ? { id: r.id } : r.result({}));
+  }
+  document.documentElement.appendChild(root);
+  window.__zwebHop = { show, clear: () => { root.remove(); delete window.__zwebHop; } };
+  return JSON.stringify(list);
+})()
