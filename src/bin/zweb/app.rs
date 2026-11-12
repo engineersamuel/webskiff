@@ -40,7 +40,7 @@ pub enum Msg {
     Dialog { tab: u64, dialog: Dialog },
     Hints { tab: u64, json: Result<String, String> },
     /// Hints read ahead (hints.js `__zwebHopPrepare()`).
-    Prepared { tab: u64, json: String },
+    Prepared { tab: u64, gen: u64, json: String },
     /// The hint overlay for the typed letters (hints.js `show`).
     HintImage { tab: u64, json: String },
     Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
@@ -457,7 +457,7 @@ impl App {
             }
             Msg::Found { tab, generation, query, result } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
-            Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
+            Msg::Prepared { tab, gen, json } => self.hints_prepared(tab, gen, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
             Msg::Focused { ok } => self.focused(ok),
             Msg::Tick => self.tick(),
@@ -621,21 +621,20 @@ impl App {
             self.view().evaluate(&format!("{}{lib};__zwebHopPrepare()", self.hints_mode()), move |r| {
                 crate::trace!("hints prepared {}", r.as_ref().map_or_else(|e| e.to_string(), |j| format!("{} B", j.len())));
                 if let Ok(json) = r {
-                    send(Msg::Prepared { tab, json });
+                    send(Msg::Prepared { tab, gen, json });
                 }
             });
         }
     }
 
-    fn hints_prepared(&mut self, tab: u64, json: &str) {
-        if self.index_of(tab) != Some(self.active) {
+    fn hints_prepared(&mut self, tab: u64, gen: u64, json: &str) {
+        if gen != self.prep_gen || self.index_of(tab) != Some(self.active) {
             return;
         }
         let pending = serde_json::from_str::<String>(json).ok()
             .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
             .is_some_and(|v| v["pending"] == true);
         if pending {
-            let gen = self.prep_gen;
             zebkit::after(Duration::from_millis(16), move || send(Msg::Prepare { gen }));
             return;
         }
