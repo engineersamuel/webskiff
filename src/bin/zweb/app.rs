@@ -206,6 +206,8 @@ pub struct App {
     /// The dim layer's colour of the hints shown.
     hint_dim: Option<[u8; 4]>,
     hint_new_tab: bool,
+    /// Hints were shown in this session: read them ahead from now on.
+    hints_used: bool,
     find: String,
     find_generation: u64,
     message: String,
@@ -247,6 +249,7 @@ impl App {
             hint_typed: String::new(),
             hint_dim: None,
             hint_new_tab: false,
+            hints_used: false,
             find: String::new(),
             find_generation: 0,
             message,
@@ -611,10 +614,11 @@ impl App {
     }
 
     fn prepare_hints(&self, gen: u64) {
-        // Not while a prompt or help is open: its page scripts (find) would
-        // wait behind this one, which is slow where the canvas's first text
-        // loads fonts (seen on CI runners).
-        if gen == self.prep_gen && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
+        // Only once hints were used: the canvas's first text can load fonts
+        // for long (over 300 ms on CI runners), and every page script after
+        // it waits. That cost then comes with the first `f`, as before. Not
+        // while a prompt or help is open: its page scripts wait behind this.
+        if gen == self.prep_gen && self.hints_used && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
             crate::trace!("hints prepare");
@@ -1032,6 +1036,7 @@ impl App {
     // ---- Hints ----
 
     fn start_hints(&mut self, new_tab: bool) {
+        self.hints_used = true;
         self.mode = Mode::Hint;
         self.hint_new_tab = new_tab;
         self.hint_typed.clear();
