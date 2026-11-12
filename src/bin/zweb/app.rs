@@ -614,7 +614,9 @@ impl App {
         if gen == self.prep_gen && self.mode == Mode::Browse && !self.tabs.is_empty() {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
+            crate::trace!("hints prepare");
             self.view().evaluate(&format!("{}{lib};__zwebHopPrepare()", self.hints_mode()), move |r| {
+                crate::trace!("hints prepared {}", r.as_ref().map_or_else(|e| e.to_string(), |j| format!("{} B", j.len())));
                 if let Ok(json) = r {
                     send(Msg::Prepared { tab, json });
                 }

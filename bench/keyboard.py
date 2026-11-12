@@ -260,7 +260,8 @@ try:
 except AssertionError:
     log = Path(home.name) / ".cache/zweb/zweb.log"
     if log.exists():
-        print("BROWSER LOG:", repr(log.read_bytes()[-8000:]), flush=True)
+        lines = [line for line in log.read_bytes().splitlines() if b"XPC error" not in line]
+        print("BROWSER LOG:", repr(b"\n".join(lines)[-8000:]), flush=True)
     raise
 finally:
     try:
