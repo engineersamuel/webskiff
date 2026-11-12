@@ -206,8 +206,6 @@ pub struct App {
     /// The dim layer's colour of the hints shown.
     hint_dim: Option<[u8; 4]>,
     hint_new_tab: bool,
-    /// Hints were shown in this session: read them ahead from now on.
-    hints_used: bool,
     find: String,
     find_generation: u64,
     message: String,
@@ -249,7 +247,6 @@ impl App {
             hint_typed: String::new(),
             hint_dim: None,
             hint_new_tab: false,
-            hints_used: false,
             find: String::new(),
             find_generation: 0,
             message,
@@ -614,11 +611,10 @@ impl App {
     }
 
     fn prepare_hints(&self, gen: u64) {
-        // Only once hints were used: the canvas's first text can load fonts
-        // for long (over 300 ms on CI runners), and every page script after
-        // it waits. That cost then comes with the first `f`, as before. Not
-        // while a prompt or help is open: its page scripts wait behind this.
-        if gen == self.prep_gen && self.hints_used && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
+        if self.renderer.gfx == crate::render::Gfx::Blocks {
+            return;
+        }
+        if gen == self.prep_gen && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
             crate::trace!("hints prepare");
@@ -632,6 +628,17 @@ impl App {
     }
 
     fn hints_prepared(&mut self, tab: u64, json: &str) {
+        if self.index_of(tab) != Some(self.active) {
+            return;
+        }
+        let pending = serde_json::from_str::<String>(json).ok()
+            .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+            .is_some_and(|v| v["pending"] == true);
+        if pending {
+            let gen = self.prep_gen;
+            zebkit::after(Duration::from_millis(16), move || send(Msg::Prepare { gen }));
+            return;
+        }
         if let (Some(id), Some(hop), hints) = parse_hints(json) {
             self.prepared = Some((tab, id, hop, hints));
         }
@@ -1036,7 +1043,6 @@ impl App {
     // ---- Hints ----
 
     fn start_hints(&mut self, new_tab: bool) {
-        self.hints_used = true;
         self.mode = Mode::Hint;
         self.hint_new_tab = new_tab;
         self.hint_typed.clear();

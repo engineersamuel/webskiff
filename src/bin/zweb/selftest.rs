@@ -65,6 +65,39 @@ fn click(view: &View, x: f32, y: f32) {
 
 fn steps() -> Vec<(&'static str, Act, Check)> {
     vec![
+        (
+            "cold hint fonts do not hold the page script queue",
+            Box::new(|_, v| {
+                let lib = HINTS_JS.split("\n(() => {").next().unwrap();
+                v.evaluate(&format!(r#"
+                    window.RealWorker = Worker;
+                    window.Worker = class extends RealWorker {{
+                        postMessage(data) {{ setTimeout(() => super.postMessage(data), 1000); }}
+                    }};
+                    window.__zwebHopGrid = [80, 30];
+                    {lib}
+                    window.hintPending = JSON.parse(__zwebHopPrepare()).pending;
+                    window.Worker = RealWorker;
+                "#), |_| {});
+                v.evaluate(
+                    "window.hintQueueFree = window.hintPending && JSON.parse(__zwebHopPrepare()).pending && innerHeight === 600",
+                    |_| {},
+                );
+            }),
+            Check::Js("window.hintQueueFree", "true"),
+        ),
+        (
+            "warmed hints reuse the same PNG and id",
+            Box::new(|_, _| {}),
+            Check::Js(r#"(() => {
+                const prepared = JSON.parse(__zwebHopPrepare());
+                const taken = __zwebHopPrepare.take();
+                delete window.__zwebHopGrid;
+                return !!prepared.id && prepared.id === taken.id &&
+                    prepared.png === taken.png && prepared.list.length === 4 &&
+                    prepared.cells.length === 4;
+            })()"#, "true"),
+        ),
         ("click focuses the input", Box::new(|_, v| click(v, 110.0, 20.0)), Check::Js("document.activeElement.id", "\"f\"")),
         ("caret callback fires", Box::new(|_, _| {}), Check::Flag(|c| c.caret.get())),
         ("typing text", Box::new(|_, v| typed(v, "Hi there")), Check::Js("f.value", "\"Hi there\"")),
