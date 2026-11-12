@@ -91,8 +91,9 @@ Use Conventional Commit **messages**, not only PR titles: rebase merging preserv
 individual messages. `fix: ...` means a patch, `feat: ...` means a feature, and
 `feat!: ...` or a `BREAKING CHANGE:` footer marks an incompatible change.
 Before 1.0, incompatible changes bump the minor version. The configured
-prerelease strategy keeps releases on the `beta` channel. Stable releases need
-an explicit configuration change after acceptance.
+prerelease strategy keeps version numbers on the `beta` channel, but GitHub
+publishes each one as a full release so it shows as **Latest**. Dropping the
+`beta` suffix needs an explicit configuration change after acceptance.
 
 After the release PR merges:
 

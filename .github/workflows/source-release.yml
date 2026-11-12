@@ -227,5 +227,5 @@ jobs:
               '[.[][] | select(.tag_name == $tag)] |
               if length == 1 then .[0].id else error("Expected one release for " + $tag) end')"
           gh api "repos/engineersamuel/webskiff/releases/$release_id" --method PATCH \
-            -H "User-Agent: $CARGO_HTTP_USER_AGENT" -F draft=false \
+            -H "User-Agent: $CARGO_HTTP_USER_AGENT" -F draft=false -f make_latest=true \
             --jq .html_url
