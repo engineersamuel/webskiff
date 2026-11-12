@@ -18,7 +18,7 @@ use zebkit::{LoadEvent, View};
 use crate::keys;
 use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::input::{self, Edit, TextInput};
-use crate::render::{Layout, Renderer};
+use crate::render::{Hop, Layout, Renderer};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
@@ -41,8 +41,8 @@ pub enum Msg {
     Hints { tab: u64, json: Result<String, String> },
     /// Hints read ahead (hints.js `__zwebHopPrepare()`).
     Prepared { tab: u64, json: String },
-    /// The hint overlay for the typed letters, as a base64 PNG.
-    HintImage { tab: u64, png: String },
+    /// The hint overlay for the typed letters (hints.js `show`).
+    HintImage { tab: u64, json: String },
     Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
     Focused { ok: bool },
     Extents { tab: u64, json: Option<String> },
@@ -137,10 +137,11 @@ struct Hint {
     edit: bool,
 }
 
-/// hints.js's result, a JSON string of JSON: its id, overlay PNG and hints.
-fn parse_hints(json: &str) -> (Option<String>, Option<String>, Vec<Hint>) {
+/// hints.js's result, a JSON string of JSON: its id, overlay and hints.
+fn parse_hints(json: &str) -> (Option<String>, Option<Hop>, Vec<Hint>) {
     let mut v: serde_json::Value =
         serde_json::from_str::<String>(json).ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    let hop = parse_hop(&v);
     let list = if v.is_array() { v.take() } else { v["list"].take() };
     let hints = list
         .as_array()
@@ -156,7 +157,22 @@ fn parse_hints(json: &str) -> (Option<String>, Option<String>, Vec<Hint>) {
                 .collect()
         })
         .unwrap_or_default();
-    (v["id"].as_str().map(String::from), v["png"].as_str().map(String::from), hints)
+    (v["id"].as_str().map(String::from), hop, hints)
+}
+
+/// The overlay in a hints.js result: {png, cells, dim}.
+fn parse_hop(v: &serde_json::Value) -> Option<Hop> {
+    let png = v["png"].as_str()?.to_string();
+    let num = |n: &serde_json::Value| n.as_f64().unwrap_or(0.0).max(0.0) as u32;
+    let cells = v["cells"].as_array()?.iter().filter_map(|c| {
+        let c = c.as_array().filter(|c| c.len() == 8)?;
+        Some(std::array::from_fn(|i| num(&c[i])))
+    });
+    let mut dim = [255, 255, 255, 191];
+    if let Some(d) = v["dim"].as_array().filter(|d| d.len() == 4) {
+        dim = std::array::from_fn(|i| num(&d[i]).min(255) as u8);
+    }
+    Some(Hop { png, cells: cells.collect(), dim })
 }
 
 pub struct Options {
@@ -185,8 +201,10 @@ pub struct App {
     prompt: Option<Prompt>,
     hints: Vec<Hint>,
     /// Hints read ahead for a tab: its id, hints.js's id, the overlay, the hints.
-    prepared: Option<(u64, String, String, Vec<Hint>)>,
+    prepared: Option<(u64, String, Hop, Vec<Hint>)>,
     hint_typed: String,
+    /// The dim layer's colour of the hints shown.
+    hint_dim: Option<[u8; 4]>,
     hint_new_tab: bool,
     find: String,
     find_generation: u64,
@@ -227,6 +245,7 @@ impl App {
             hints: Vec::new(),
             prepared: None,
             hint_typed: String::new(),
+            hint_dim: None,
             hint_new_tab: false,
             find: String::new(),
             find_generation: 0,
@@ -424,9 +443,16 @@ impl App {
             }
             Msg::Dialog { tab, dialog } => self.dialog_opened(tab, dialog),
             Msg::Hints { tab, json } => self.hints_received(tab, json),
-            Msg::HintImage { tab, png } => {
+            Msg::HintImage { tab, json } => {
                 if self.index_of(tab) == Some(self.active) && self.mode == Mode::Hint {
-                    self.renderer.hop(png);
+                    let mut hop = serde_json::from_str(&json).ok().and_then(|v| parse_hop(&v));
+                    // Same dim layer as when the hints were shown.
+                    if let (Some(h), Some(dim)) = (hop.as_mut(), self.hint_dim) {
+                        h.dim = dim;
+                    }
+                    if hop.is_some() {
+                        self.renderer.hop(hop);
+                    }
                 }
             }
             Msg::Found { tab, generation, query, result } => self.found(tab, generation, &query, result),
@@ -489,7 +515,7 @@ impl App {
         if i == self.active {
             if self.mode == Mode::Hint {
                 self.mode = Mode::Browse;
-                self.renderer.hop(String::new());
+                self.renderer.hop(None);
             }
             self.renderer.forget();
             self.extents = None;
@@ -564,10 +590,10 @@ impl App {
         // hints read ahead are still right (hints.js).
         let v = json.ok().map(|j| parse_hints(&j)).unwrap_or_default();
         let prepared = self.prepared.take().filter(|p| p.0 == tab && v.0.as_deref() == Some(p.1.as_str()));
-        let png = match prepared {
-            Some((_, _, png, hints)) => {
+        let hop = match prepared {
+            Some((_, _, hop, hints)) => {
                 self.hints = hints;
-                Some(png)
+                Some(hop)
             }
             None => {
                 self.hints = v.2;
@@ -577,8 +603,9 @@ impl App {
         if self.hints.is_empty() {
             self.mode = Mode::Browse;
             self.message = "no links here".into();
-        } else if let Some(png) = png {
-            self.renderer.hop(png);
+        } else if let Some(hop) = hop {
+            self.hint_dim = Some(hop.dim);
+            self.renderer.hop(Some(hop));
         }
         self.draw();
     }
@@ -596,8 +623,8 @@ impl App {
     }
 
     fn hints_prepared(&mut self, tab: u64, json: &str) {
-        if let (Some(id), Some(png), hints) = parse_hints(json) {
-            self.prepared = Some((tab, id, png, hints));
+        if let (Some(id), Some(hop), hints) = parse_hints(json) {
+            self.prepared = Some((tab, id, hop, hints));
         }
     }
 
@@ -1012,14 +1039,19 @@ impl App {
 
     /// With Kitty graphics, hints.js gives the overlay as a terminal image:
     /// showing it needs no new page frame.
-    fn hints_mode(&self) -> &'static str {
-        if self.renderer.gfx == crate::render::Gfx::Blocks { "" } else { "window.__zwebHopImage=true;" }
+    fn hints_mode(&self) -> String {
+        if self.renderer.gfx == crate::render::Gfx::Blocks {
+            return String::new();
+        }
+        let l = self.layout();
+        format!("window.__zwebHopGrid=[{},{}];", l.cols, l.rows)
     }
 
     fn clear_hints(&mut self) {
         if !self.hints.is_empty() {
-            self.renderer.hop(String::new());
+            self.renderer.hop(None);
         }
+        self.hint_dim = None;
         self.hints.clear();
         self.hint_typed.clear();
         if let Some(t) = self.tabs.get(self.active) {
@@ -1033,8 +1065,8 @@ impl App {
         let js = format!("window.__zwebHop && __zwebHop.show({})", serde_json::to_string(typed).unwrap());
         let id = self.tab().id;
         self.view().evaluate(&js, move |r| {
-            if let Some(png) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
-                send(Msg::HintImage { tab: id, png });
+            if let Some(json) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
+                send(Msg::HintImage { tab: id, json });
             }
         });
     }

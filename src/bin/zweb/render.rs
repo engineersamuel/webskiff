@@ -63,8 +63,8 @@ struct Pending {
     /// Forget what was learned of the page (new page, other tab).
     forget: bool,
     clear_popup: bool,
-    /// The hint overlay: a base64 PNG to show over the page, or "" to remove it.
-    hop: Option<String>,
+    /// The hint overlay to show, or Some(None) to remove it.
+    hop: Option<Option<Hop>>,
     clear_all: bool,
     stop: bool,
 }
@@ -80,8 +80,20 @@ pub struct Renderer {
 }
 
 const POPUP_ID: u32 = 1;
-/// The hint overlay, over the page and its popup.
+/// The hint overlay, over the page and its popup: the code boxes, and the
+/// dim layer under them.
 const HOP_ID: u32 = 3;
+const DIM_ID: u32 = 4;
+
+/// The hint overlay (hints.js): a base64 PNG atlas of the code boxes, where
+/// each goes, and the dim layer's colour.
+#[derive(Default)]
+pub struct Hop {
+    pub png: String,
+    /// [col, row, cols, rows, x, y, w, h]: cells, and pixels in the atlas.
+    pub cells: Vec<[u32; 8]>,
+    pub dim: [u8; 4],
+}
 /// After this long with no new frame, photo tiles sent blurry are sent sharp.
 const REFINE_AFTER: Duration = Duration::from_millis(120);
 
@@ -498,29 +510,52 @@ impl Rows {
         part
     }
 
-    /// The hint overlay, a base64 PNG, scaled to the page's cells; "" removes
-    /// its placement. The terminal keeps the image: the same one shown again
-    /// is only placed.
-    fn hop(&mut self, out: &mut Vec<u8>, layout: &Layout, png: &str) {
-        if png.is_empty() || layout.cols == 0 || layout.rows == 0 {
-            out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={HOP_ID},q=2\x1b\\").as_bytes());
+    /// Shows the hint overlay over the page's cells, or removes it. The
+    /// terminal keeps the atlas: the same one shown again is only placed.
+    fn hop(&mut self, out: &mut Vec<u8>, layout: &Layout, hop: Option<&Hop>) {
+        out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={HOP_ID},q=2\x1b\\").as_bytes());
+        let Some(hop) = hop.filter(|_| layout.cols > 0 && layout.rows > 0) else {
+            out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={DIM_ID},q=2\x1b\\").as_bytes());
+            return;
+        };
+        let dim = base64::engine::general_purpose::STANDARD.encode(hop.dim);
+        out.extend_from_slice(
+            format!(
+                "\x1b[{};1H\x1b_Ga=T,f=32,s=1,v=1,i={DIM_ID},p=1,c={},r={},C=1,q=2,z=2;{dim}\x1b\\",
+                layout.top + 1,
+                layout.cols,
+                layout.rows
+            )
+            .as_bytes(),
+        );
+        if hop.png.is_empty() {
             return;
         }
-        out.extend_from_slice(format!("\x1b[{};1H", layout.top + 1).as_bytes());
-        let place = format!("i={HOP_ID},p=1,c={},r={},C=1,q=2,z=2", layout.cols, layout.rows);
-        let hash = xxhash_rust::xxh3::xxh3_64(png.as_bytes());
-        if self.hop_sent == Some(hash) {
-            out.extend_from_slice(format!("\x1b_Ga=p,{place}\x1b\\").as_bytes());
-            return;
+        let hash = xxhash_rust::xxh3::xxh3_64(hop.png.as_bytes());
+        if self.hop_sent != Some(hash) {
+            self.hop_sent = Some(hash);
+            let chunks: Vec<&[u8]> = hop.png.as_bytes().chunks(4096).collect();
+            for (i, chunk) in chunks.iter().enumerate() {
+                let m = u8::from(i + 1 < chunks.len());
+                let head = if i == 0 { format!("a=t,f=100,i={HOP_ID},q=2,m={m}") } else { format!("m={m},q=2") };
+                out.extend_from_slice(format!("\x1b_G{head};").as_bytes());
+                out.extend_from_slice(chunk);
+                out.extend_from_slice(b"\x1b\\");
+            }
         }
-        self.hop_sent = Some(hash);
-        let chunks: Vec<&[u8]> = png.as_bytes().chunks(4096).collect();
-        for (i, chunk) in chunks.iter().enumerate() {
-            let m = u8::from(i + 1 < chunks.len());
-            let head = if i == 0 { format!("a=T,f=100,{place},m={m}") } else { format!("m={m},q=2") };
-            out.extend_from_slice(format!("\x1b_G{head};").as_bytes());
-            out.extend_from_slice(chunk);
-            out.extend_from_slice(b"\x1b\\");
+        for (k, &[col, row, cols, rows, x, y, w, h]) in hop.cells.iter().enumerate() {
+            if row >= layout.rows as u32 || col >= layout.cols as u32 {
+                continue;
+            }
+            out.extend_from_slice(
+                format!(
+                    "\x1b[{};{}H\x1b_Ga=p,i={HOP_ID},p={},x={x},y={y},w={w},h={h},c={cols},r={rows},C=1,q=2,z=3\x1b\\",
+                    layout.top as u32 + row + 1,
+                    col + 1,
+                    k + 1
+                )
+                .as_bytes(),
+            );
         }
     }
 
@@ -621,9 +656,9 @@ impl Renderer {
         self.wake.notify_one();
     }
 
-    /// Shows the hint overlay (a base64 PNG) over the page; "" removes it.
-    pub fn hop(&self, png: String) {
-        self.pending.lock().unwrap().hop = Some(png);
+    /// Shows the hint overlay over the page; None removes it.
+    pub fn hop(&self, hop: Option<Hop>) {
+        self.pending.lock().unwrap().hop = Some(hop);
         self.wake.notify_one();
     }
 
@@ -730,16 +765,16 @@ impl Renderer {
             self.show_prediction(&mut out, layout, rows, pending.predict);
         }
         // Not over the help screen.
-        let hop_png = pending.hop.as_deref().filter(|png| self.gfx != Gfx::Blocks && (png.is_empty() || !layout.hidden));
-        if let Some(png) = hop_png {
-            rows.hop(&mut out, layout, png);
+        let hop = pending.hop.as_ref().filter(|h| self.gfx != Gfx::Blocks && (h.is_none() || !layout.hidden));
+        if let Some(h) = hop {
+            rows.hop(&mut out, layout, h.as_ref());
         }
         if !out.is_empty() {
             write_out(&out);
             if pending.predict != 0 {
                 crate::trace!("predict written {}", pending.predict);
             }
-            if hop_png.is_some_and(|png| !png.is_empty()) {
+            if hop.is_some_and(|h| h.is_some()) {
                 crate::trace!("hints written");
             }
         }

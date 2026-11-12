@@ -43,7 +43,7 @@ and no change may make anything slower without the user's approval.**
 | `main.rs` | Terminal setup, graphics detection, Chromium switches, threads (engine on main, input thread, render thread) |
 | `app.rs` | `App`: tabs, modes (Browse/Insert/Hint), commands and keys, prompt, status bar, scroll prediction requests, placeholders (`I`) |
 | `render.rs` | Render thread: page split into tiles (cell row × ~16-col band) keyed by xxh3 hash, reuse via Kitty `a=p`, scroll prediction + "tape" of seen rows, progressive photo tiles, parallel zlib encode |
-| `hints.js` | hop.nvim-style hints (dim overlay, code replaces a target's first characters), drawn on a canvas and shown as a Kitty image over the page (in the page with `--gfx blocks`); read ahead when the page is still |
+| `hints.js` | hop.nvim-style hints (dim overlay, code replaces a target's first characters), shown as Kitty images over the page (a 1×1 dim layer stretched over it, and the code boxes cut from one PNG atlas) (in the page with `--gfx blocks`); read ahead when the page is still |
 | `keys.rs` | crossterm key → DOM key events |
 | `config.rs` | Startup-only TOML configuration, modifier-aware per-mode bindings, and generated help |
 | `input.rs` | UTF-8 prompt cursor editing |
@@ -75,7 +75,7 @@ over other global shortcuts (so Ctrl-W deletes a word in prompts).
 | b (page up) | ~6–7 / ~7.5 ms |
 | Space (page down) | ~8 / up to ~60 ms (new content must wait for Chrome to draw it) |
 | Typing a character | ~4–6 / ~7 ms |
-| f (hop hints) | ~2–4 / ~3–6 ms when the page was still ≥ ~300 ms; ~9 / ~11 ms just after a scroll (scale 2: ~17 / ~20 ms). The overlay is a terminal image made ahead, not page pixels |
+| f (hop hints) | ~2–6 / ~3–8 ms, also just after a scroll and at scale 2; a typed hint letter ~4–5 / ~4–6 ms. The overlay is terminal images (a dim layer and an atlas of the code boxes), made ahead, not page pixels |
 | Switching tabs | ~3 / ~4 ms |
 
 Key speed settings: `--disable-smooth-scrolling --disable-gpu-vsync --disable-gpu-compositing --hide-scrollbars`.
@@ -365,7 +365,7 @@ protection bypass; it merges only its own release PRs, after the required checks
 - **Not seen in herdr** (checked only by rebuilding the screen from zweb's output):
   - Fix for gray grid lines on white pages (each tile is sent with a 1-pixel border, and `x,y,w,h` crops it).
   - If the lines are still there, try `--scale 2`.
-- **hop hints:** a wide code letter hides the whole letter it touches, so a small gap can show. Codes for icons sit at the icon's corner. `f` within ~300 ms of a scroll, and a typed hint letter at `--scale 2` (~17 ms), are above 10 ms.
+- **hop hints:** a wide code letter hides the whole letter it touches, so a small gap can show. Codes for icons sit at the icon's corner. `f` just after a scroll can reach ~11–12 ms (max, n=20).
 - **Page down into content Chrome has not drawn** is above 10 ms. The only fix found (a taller hidden page) breaks fixed footers.
 - **Pages that focus a text box on load** (e.g. Google) capture keys: press Esc first. This matches Vimium.
 - **Not built:** downloads, bookmarks, a history list, file upload, dark-mode signal to pages.
