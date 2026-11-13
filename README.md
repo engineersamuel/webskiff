@@ -92,9 +92,9 @@ Press **`?`** or **`F1`** for the full list, generated from your configuration.
 | Next / previous match | `n` / `N` | `F3` / `Shift-F3` |
 | New tab | `t` | `Ctrl-T` |
 | Close tab | `x` | `Ctrl-W` |
-| Reopen closed tab | `X` | `Ctrl-Shift-T` |
+| Reopen closed tab (`reopen_tab`) | `X` | `Ctrl-Shift-T` |
 | Next / previous browser tab | `]` / `[` | `Ctrl-Tab` / `Ctrl-Shift-Tab` |
-| Previous active tab | `^` | — |
+| Previous active tab (`alternate_tab`) | `^` | — |
 | Follow a link with hints | `f` | Mouse click |
 | Select and copy page text | `v`, move, `y` | Mouse select is not possible |
 | Move through page controls | `Tab` / `Shift-Tab` | `Tab` / `Shift-Tab` |
