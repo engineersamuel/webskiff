@@ -2878,17 +2878,89 @@ mod jumps_tests {
     }
 
     #[test]
-    fn app_jumps_user_switch_records_pending_target_in_both_directions() {
+    fn app_jumps_user_switch_cancels_restore_and_records_committed_url() {
         let mut app = restoring();
+        app.load_event(1, app.tab().load_generation.get(), LoadEvent::Started, "b".into());
+        let stale = committed(&app, 0, "b");
         app.switch(1);
-        app.switch(0);
-        assert_eq!(app.tabs[0].nav.current().url, "b");
+        assert_eq!(&*app.tabs[0].view.calls.borrow(), &["load b", "stop"]);
+        assert!(!app.tabs[0].loading);
+        assert!(!app.tabs[0].nav.restoring());
+        assert_eq!(app.tabs[0].url(), "c");
+        let jumps = format!("{:?}", app.jumps);
+        app.handle(stale);
+        assert_eq!(app.tabs[0].url(), "c");
+        assert_eq!(format!("{:?}", app.jumps), jumps);
+        for url in ["c", "b", "a"] {
+            let current = app.tab().nav.current();
+            assert_eq!(app.jumps.back(current), Some(crate::jumps::Jump { tab: 1, url: url.into() }));
+        }
+        let current = app.tab().nav.current();
+        assert_eq!(app.jumps.back(current), None);
+    }
+
+    fn cancelled_restore_ignores_queued_commit(action: Option<Action>, expected: &str) {
+        let mut app = restoring();
+        app.load_event(1, app.tab().load_generation.get(), LoadEvent::Started, "b".into());
+        let stale = committed(&app, 0, "b");
+        match action {
+            Some(action) => assert!(app.navigation_command(action)),
+            None => {
+                app.prompt = Some(Prompt {
+                    kind: PromptKind::Open, label: "open: ".into(),
+                    input: TextInput::new("https://example.com/d".into()),
+                    not_found: false, keep_open: false, hint: String::new(),
+                });
+                app.prompt_done(true);
+            }
+        }
+        assert_eq!(app.tab().view.calls.borrow().last().unwrap(), expected);
+        assert!(!app.tab().nav.restoring());
+        let url = if action.is_none() { "https://example.com/d" } else { "c" };
+        assert_eq!(app.tab().url(), url);
+        let jumps = format!("{:?}", app.jumps);
+        app.handle(stale);
+        assert_eq!(app.tab().url(), url);
+        assert_eq!(format!("{:?}", app.jumps), jumps);
+        if action == Some(Action::Stop) {
+            assert!(!app.tab().loading);
+        }
+    }
+
+    #[test]
+    fn app_jumps_back_cancels_queued_restore() {
+        cancelled_restore_ignores_queued_commit(Some(Action::Back), "back");
+    }
+
+    #[test]
+    fn app_jumps_forward_cancels_queued_restore() {
+        cancelled_restore_ignores_queued_commit(Some(Action::Forward), "forward");
+    }
+
+    #[test]
+    fn app_jumps_reload_cancels_queued_restore() {
+        cancelled_restore_ignores_queued_commit(Some(Action::Reload), "reload");
+    }
+
+    #[test]
+    fn app_jumps_stop_cancels_queued_restore() {
+        cancelled_restore_ignores_queued_commit(Some(Action::Stop), "stop");
+    }
+
+    #[test]
+    fn app_jumps_open_cancels_queued_restore() {
+        cancelled_restore_ignores_queued_commit(None, "load https://example.com/d");
+    }
+
+    #[test]
+    fn app_jumps_back_without_restore_keeps_generation() {
+        let mut app = app_with_tabs(&["c"]);
+        let generation = app.tab().load_generation.get();
+        assert!(app.navigation_command(Action::Back));
+        assert_eq!(app.tab().load_generation.get(), generation);
         visit(&mut app, 0, "b");
-        app.jump(true);
-        assert_eq!(app.active, 1);
-        app.jump(true);
-        assert_eq!(app.active, 0);
-        assert_eq!(app.tabs[0].nav.current().url, "b");
+        assert_eq!(app.tab().url(), "b");
+        assert_eq!(&*app.tab().view.calls.borrow(), &["back"]);
     }
 
     #[test]
