@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use flate2::{write::ZlibEncoder, Compression};
 use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse};
 use zebkit::page::DialogPolicy;
@@ -75,11 +75,20 @@ const APP_PAGE: &str =
 /// Gives the app `codes` in one turn, as keys typed together come, then
 /// stores [in Visual mode, the page selection] as `window.<name>` on `report`.
 fn app_keys(report: &View, name: &'static str, codes: &[KeyCode]) {
+    let events: Vec<Event> = codes
+        .iter()
+        .map(|&code| Event::Key(key(code, KeyModifiers::NONE)))
+        .collect();
+    app_events(report, name, &events);
+}
+
+/// As `app_keys`, with any terminal events.
+fn app_events(report: &View, name: &'static str, events: &[Event]) {
     APP.with(|a| {
         let mut a = a.borrow_mut();
         let app = a.as_mut().expect("app");
-        for &code in codes {
-            app.handle(Msg::Term(Event::Key(key(code, KeyModifiers::NONE))));
+        for e in events {
+            app.handle(Msg::Term(e.clone()));
         }
     });
     let report = report.clone();
@@ -340,6 +349,20 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             "app: v then Esc at once end in Browse with no selection",
             Box::new(|_, v| app_keys(v, "vesc", &[KeyCode::Esc, KeyCode::Char('v'), KeyCode::Esc])),
             Check::Js("window.vesc", "\"[false,\\\"\\\"]\""),
+        ),
+        (
+            "app: a scroll ends VISUAL and removes its selection",
+            Box::new(|_, v| {
+                let wheel = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 10,
+                    row: 5,
+                    modifiers: KeyModifiers::NONE,
+                });
+                let k = |c| Event::Key(key(KeyCode::Char(c), KeyModifiers::NONE));
+                app_events(v, "vscroll", &[k('v'), k('l'), wheel]);
+            }),
+            Check::Js("window.vscroll", "\"[false,\\\"\\\"]\""),
         ),
         (
             "app: v on a page with no text returns to Browse",

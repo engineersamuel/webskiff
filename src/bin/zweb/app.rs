@@ -2480,4 +2480,9 @@ mod tests {
         find.suggest(&history, 1_000);
         assert_eq!(find.body(200).1, "");
     }
+
+    #[test]
+    fn yank_of_an_empty_selection_writes_nothing() {
+        assert_eq!(super::yank(""), (None, "nothing selected".to_string()));
+    }
 }
