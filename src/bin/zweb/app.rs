@@ -1320,10 +1320,7 @@ impl App {
     /// A wheel event; a small vertical step of the page is shown at once
     /// from the rows the terminal holds (render.rs, `predict`).
     fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32, mods: Modifiers) {
-        if matches!(self.mode, Mode::Hint | Mode::Visual) {
-            self.leave_hint_or_visual();
-            self.draw();
-        }
+        self.leave_for_wheel();
         if dx == 0.0 {
             self.predict(dy);
         }
@@ -1332,6 +1329,14 @@ impl App {
         crate::trace!("wheel sent {dy} at {}", crate::trace::ticks_us());
         self.query_extents();
         self.schedule_prepare();
+    }
+
+    /// A wheel scroll ends Hint and Visual mode.
+    fn leave_for_wheel(&mut self) {
+        if matches!(self.mode, Mode::Hint | Mode::Visual) {
+            self.leave_hint_or_visual();
+            self.draw();
+        }
     }
 
     fn predict(&mut self, dy: f32) {
@@ -1759,9 +1764,11 @@ impl App {
             ),
             MouseEventKind::Moved => v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, mods),
             MouseEventKind::ScrollRight => {
+                self.leave_for_wheel();
                 v.send_wheel(x, y, line, 0.0, false, WheelPhase::None, mods)
             }
             MouseEventKind::ScrollLeft => {
+                self.leave_for_wheel();
                 v.send_wheel(x, y, -line, 0.0, false, WheelPhase::None, mods)
             }
         }
