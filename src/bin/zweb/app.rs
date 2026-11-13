@@ -681,6 +681,11 @@ impl App {
         self.mode == Mode::Visual
     }
 
+    /// For the self-test: the active tab has not finished its load.
+    pub(crate) fn loading(&self) -> bool {
+        self.tab().loading
+    }
+
     fn index_of(&self, id: u64) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
     }

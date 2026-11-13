@@ -46,7 +46,19 @@ type Act = Box<dyn Fn(&Rc<Ctx>, &View)>;
 enum Check {
     Js(&'static str, &'static str),
     Flag(fn(&Ctx) -> bool),
+    /// Passes when the condition holds within 10 s; checked every 50 ms.
+    Until(fn() -> bool),
     None,
+}
+
+fn wait_until(cond: fn() -> bool, deadline: Instant, done: Box<dyn FnOnce(bool)>) {
+    if cond() || Instant::now() >= deadline {
+        done(cond());
+        return;
+    }
+    zebkit::after(Duration::from_millis(50), move || {
+        wait_until(cond, deadline, done)
+    });
 }
 
 fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
@@ -338,7 +350,7 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                 app.open_tab(Some(APP_PAGE), None);
                 APP.with(|a| *a.borrow_mut() = Some(app));
             }),
-            Check::None,
+            Check::Until(|| APP.with(|a| !a.borrow().as_ref().expect("app").loading())),
         ),
         (
             "app: v then l at once select two characters in VISUAL",
@@ -441,6 +453,17 @@ fn run_step(ctx: Rc<Ctx>, mut list: Vec<(&'static str, Act, Check)>) {
                 let ok = f(&ctx);
                 report(ok, "false".into());
                 run_step(ctx.clone(), list);
+            }
+            Check::Until(cond) => {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                wait_until(
+                    cond,
+                    deadline,
+                    Box::new(move |ok| {
+                        report(ok, "still loading".into());
+                        run_step(ctx, list);
+                    }),
+                );
             }
             Check::None => run_step(ctx.clone(), list),
         }
