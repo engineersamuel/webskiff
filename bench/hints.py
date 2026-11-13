@@ -143,6 +143,8 @@ def run(binary, scale):
             press("g f", b"f")
             for letter in b"link":
                 press("filter letter", bytes([letter]), filtering=True)
+            # Every link says "link": a digit (code prefix) filters hints out.
+            press("filter digit", b"1", filtering=True)
             press(None, b"\x1b")
             press(None, b"\x11")
             _, status = os.waitpid(pid, 0)
@@ -177,6 +179,13 @@ if __name__ == "__main__":
             f"  bytes {percentile(sizes, .5)}/{percentile(sizes, .9)} (n={len(group)})"
         )
     letters = [sample for sample in samples if sample["action"] == "filter letter"]
+    digits = [sample for sample in samples if sample["action"] == "filter digit"]
+    print(
+        f"filter digit     PNG transmissions {sum(s['png'] for s in digits)}"
+        f"  placed == matches {sum(s['placed'] == s['matches'] for s in digits)}/{len(digits)}"
+        f"  matches {min(s['matches'] or 0 for s in digits)}-{max(s['matches'] or 0 for s in digits)}"
+        f" of {min(s['matches'] or 0 for s in letters)}+ after the letters"
+    )
     print(
         f"filter letter    PNG transmissions {sum(s['png'] for s in letters)}"
         f"  placed == matches {sum(s['placed'] == s['matches'] for s in letters)}/{len(letters)}"
@@ -185,7 +194,7 @@ if __name__ == "__main__":
     )
     assert all(
         s["png"] == 0 and (s["matches"] or 0) > 1 and s["placed"] == s["matches"] and s["atlas_before"]
-        for s in letters
+        for s in letters + digits
     ), "a filter letter sent a PNG, placed a filtered-out hint, or left one match"
     if args.check:
         first = [sample["ms"] for sample in samples if sample["action"] == "first f"]

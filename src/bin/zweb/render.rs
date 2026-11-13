@@ -87,7 +87,7 @@ const DIM_ID: u32 = 4;
 
 /// The hint overlay (hints.js): a base64 PNG atlas of the code boxes, where
 /// each goes, and the dim layer's colour.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Hop {
     pub png: String,
     /// [col, row, cols, rows, x, y, w, h]: cells, and pixels in the atlas.

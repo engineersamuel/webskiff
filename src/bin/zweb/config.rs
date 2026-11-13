@@ -64,6 +64,7 @@ actions! {
     EditExternal => "edit_external", "Edit the text field in $EDITOR";
     Hints => "hints", "Show link hints";
     HintsNewTab => "hints_new_tab", "Show hints to open in a new tab";
+    HintsFilter => "hints_filter", "Show hints filtered by link text; digits pick";
     CopyUrl => "copy_url", "Copy the current URL";
     ToggleImages => "toggle_images", "Toggle image placeholders";
     ZoomIn => "zoom_in", "Zoom in";
@@ -422,7 +423,7 @@ fn allowed(scope: Scope, action: Action) -> bool {
                 | Yank
         ),
         Scope::Insert => action == Cancel,
-        Scope::Hint => matches!(action, Cancel | Backspace),
+        Scope::Hint => matches!(action, Cancel | Backspace | Accept),
         Scope::Prompt => matches!(
             action,
             Cancel
