@@ -247,6 +247,35 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             Check::Js("window.yanked", "\"bravo\""),
         ),
         (
+            "visual mode: start skips text above the viewport, and finds none when none is shown",
+            Box::new(|_, v| {
+                v.evaluate(
+                    "document.body.innerHTML='<div style=\"height:2000px\">hidden above</div>\
+                    <p>visible text</p><div style=\"height:2000px\"></div>'",
+                    |_| {},
+                );
+                for (scroll, name) in [(1000, "none"), (1500, "some")] {
+                    let page = v.clone();
+                    v.evaluate(
+                        &format!(
+                            "getSelection().removeAllRanges();scrollTo(0,{scroll});{VISUAL_START_JS}"
+                        ),
+                        move |r| {
+                            let ok = r.unwrap_or_default();
+                            page.evaluate(
+                                &format!("window.{name}={ok};window.got=getSelection().toString()"),
+                                |_| {},
+                            );
+                        },
+                    );
+                }
+            }),
+            Check::Js(
+                "JSON.stringify([window.none, window.some, window.got])",
+                "\"[false,true,\\\"v\\\"]\"",
+            ),
+        ),
+        (
             "frame cost at 1280x800 CSS, scale 1",
             Box::new(|c, v| {
                 c.measure.set(true);
