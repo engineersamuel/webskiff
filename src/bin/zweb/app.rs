@@ -1806,6 +1806,41 @@ mod tests {
         assert_eq!(clip("Browser / café", 30), "Browser / café");
     }
 
+    #[test]
+    fn visual_keys_extend_the_page_selection() {
+        use super::visual_script;
+        use crate::config::{Config, Scope};
+        use crossterm::event::{KeyCode, KeyEvent};
+        let config = Config::parse("").unwrap();
+        for (key, dir, unit) in [
+            ('h', "backward", "character"),
+            ('l', "forward", "character"),
+            ('j', "forward", "line"),
+            ('k', "backward", "line"),
+            ('w', "forward", "word"),
+            ('b', "backward", "word"),
+            ('0', "backward", "lineboundary"),
+            ('$', "forward", "lineboundary"),
+        ] {
+            let action = config.action(Scope::Visual, KeyEvent::from(KeyCode::Char(key))).unwrap();
+            let js = visual_script(action).unwrap();
+            assert!(js.contains(&format!("getSelection().modify('extend','{dir}','{unit}')")), "{key}: {js}");
+        }
+    }
+
+    #[test]
+    fn yank_writes_osc52_up_to_100000_encoded_bytes() {
+        use super::yank;
+        let (bytes, status) = yank("hello");
+        assert_eq!(bytes.as_deref(), Some(&b"\x1b]52;c;aGVsbG8=\x07"[..]));
+        assert_eq!(status, "copied 5 chars");
+        let (bytes, _) = yank(&"a".repeat(75_000));
+        assert_eq!(bytes.map(|b| b.len()), Some("\x1b]52;c;".len() + 100_000 + 1));
+        let (bytes, status) = yank(&"a".repeat(75_001));
+        assert_eq!(bytes, None);
+        assert!(status.contains("too large"), "{status}");
+    }
+
     fn two_pages() -> crate::history::History {
         let mut history = crate::history::History::default();
         history.visit("https://second.example/", 1_000);

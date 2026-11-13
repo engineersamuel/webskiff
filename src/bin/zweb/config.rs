@@ -483,6 +483,26 @@ mod tests {
     }
 
     #[test]
+    fn default_visual_mode_keys() {
+        let config = Config::parse("").unwrap();
+        assert_eq!(action(&config, Scope::Browse, "v"), Some(Action::Visual));
+        for (key, want) in [
+            ("h", Action::CharBackward),
+            ("l", Action::CharForward),
+            ("j", Action::LineForward),
+            ("k", Action::LineBackward),
+            ("w", Action::WordForward),
+            ("b", Action::WordBackward),
+            ("0", Action::LineStart),
+            ("$", Action::LineEnd),
+            ("y", Action::Yank),
+            ("Esc", Action::Cancel),
+        ] {
+            assert_eq!(action(&config, Scope::Visual, key), Some(want), "{key}");
+        }
+    }
+
+    #[test]
     fn rejects_invalid_and_conflicting_bindings() {
         for text in [
             "[keys.browse]\nscroll_down = ['k']",

@@ -13,7 +13,9 @@ use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse};
 use zebkit::page::DialogPolicy;
 use zebkit::{LoadEvent, View};
 
-use crate::{app::{FIND_JS, HINTS_JS}, keys, render};
+use crate::app::{visual_script, yank, FIND_JS, HINTS_JS, VISUAL_START_JS, YANK_JS};
+use crate::config::Action;
+use crate::{keys, render};
 
 const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:16px sans-serif}
 #f{position:absolute;left:10px;top:10px;width:200px;height:20px}
@@ -23,7 +25,8 @@ const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:1
 <select id=s><option>one</option><option>two</option></select>
 <button id=w onclick="window.open('about:blank')">popup</button>
 <a id=t1 href=#a onclick="window.followed=1;return false" style="position:absolute;top:2000px">find target</a>
-<a id=t2 href=#b onclick="window.followed=2;return false" style="position:absolute;top:2100px">other target</a>"#;
+<a id=t2 href=#b onclick="window.followed=2;return false" style="position:absolute;top:2100px">other target</a>
+<p id=v style="position:absolute;top:300px">alpha bravo charlie</p>"#;
 
 #[derive(Default)]
 struct Ctx {
@@ -156,6 +159,29 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             Check::Js("document.activeElement.id", "\"t2\""),
         ),
         ("Enter opens the link at the match", Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))), Check::Js("window.followed", "2")),
+        (
+            "visual mode: from a find match, w extends over the word, y yanks it as OSC 52",
+            Box::new(|_, v| {
+                // A find match on "bravo", as window.find leaves it.
+                v.evaluate("const r=new Range();r.setStart(v.firstChild,6);r.setEnd(v.firstChild,11);\
+                    getSelection().removeAllRanges();getSelection().addRange(r)", |_| {});
+                v.evaluate(VISUAL_START_JS, |_| {});
+                v.evaluate(&visual_script(Action::WordForward).unwrap(), |_| {});
+                let page = v.clone();
+                v.evaluate(YANK_JS, move |r| {
+                    let text = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()).unwrap_or_default();
+                    let osc = yank(&text).0.unwrap_or_default();
+                    let payload = std::str::from_utf8(&osc)
+                        .ok()
+                        .and_then(|s| s.strip_prefix("\x1b]52;c;")?.strip_suffix('\x07'))
+                        .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+                        .unwrap_or_default();
+                    let js = format!("window.yanked={}", serde_json::to_string(&String::from_utf8_lossy(&payload)).unwrap());
+                    page.evaluate(&js, |_| {});
+                });
+            }),
+            Check::Js("window.yanked", "\"bravo\""),
+        ),
         (
             "frame cost at 1280x800 CSS, scale 1",
             Box::new(|c, v| {
