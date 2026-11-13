@@ -461,14 +461,23 @@ mod tests {
     fn prompt_tab_and_shift_tab_complete_by_default() {
         let config = Config::parse("").unwrap();
         assert_eq!(
-            config.action(Scope::Prompt, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            config.action(
+                Scope::Prompt,
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+            ),
             Some(Action::Complete)
         );
         assert_eq!(
-            config.action(Scope::Prompt, KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            config.action(
+                Scope::Prompt,
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)
+            ),
             Some(Action::CompletePrevious)
         );
-        assert_eq!(action(&config, Scope::Prompt, "Enter"), Some(Action::Accept));
+        assert_eq!(
+            action(&config, Scope::Prompt, "Enter"),
+            Some(Action::Accept)
+        );
         assert!(Config::parse("[keys.browse]\ncomplete = ['c']").is_err());
     }
 
