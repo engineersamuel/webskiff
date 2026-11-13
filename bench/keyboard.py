@@ -282,6 +282,7 @@ try:
             press(b"\t\t\t", expected="focus lg off:kept")
             press(b"\x1b")
             external_edit("ok", "legend:hello-ext")
+            press(b"\x1b")
             # The editor fails: no write-back, the edit file is deleted.
             press(b"gi", expected="focus entry")
             press(b"\x1b")
