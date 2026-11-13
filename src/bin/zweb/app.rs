@@ -318,18 +318,23 @@ enum FilterStep {
     Show(Vec<usize>),
 }
 
-/// Filtered hints' input: digits pick codes, other characters filter by
-/// text. Keys typed before the targets arrive wait in `queue`.
+/// Filtered hints' input: the keys taken, in order; digits pick codes,
+/// other characters filter by text. Keys typed before the targets arrive
+/// wait in `queue`.
 #[derive(Default)]
 struct HintFilter {
-    text: String,
-    code: String,
+    keys: String,
     queue: Vec<FilterKey>,
 }
 
 impl HintFilter {
+    fn text(&self) -> String {
+        self.keys.chars().filter(|c| !c.is_ascii_digit()).collect()
+    }
+
     fn left(&self, hints: &[Hint]) -> Vec<usize> {
-        filter_hints(hints, &self.text, &self.code)
+        let code: String = self.keys.chars().filter(char::is_ascii_digit).collect();
+        filter_hints(hints, &self.text(), &code)
     }
 
     /// Applies `key`; with no targets yet, queues it.
@@ -341,24 +346,12 @@ impl HintFilter {
         match key {
             FilterKey::Accept => return self.left(hints).first().map(|&i| FilterStep::Pick(i)),
             FilterKey::Back => {
-                if self.code.pop().is_none() {
-                    self.text.pop();
-                }
+                self.keys.pop();
             }
             FilterKey::Char(c) => {
-                let field = if c.is_ascii_digit() {
-                    &mut self.code
-                } else {
-                    &mut self.text
-                };
-                field.push(c);
+                self.keys.push(c);
                 if self.left(hints).is_empty() {
-                    let field = if c.is_ascii_digit() {
-                        &mut self.code
-                    } else {
-                        &mut self.text
-                    };
-                    field.pop();
+                    self.keys.pop();
                 }
             }
         }
@@ -2275,7 +2268,7 @@ impl App {
             None if self.mode == Mode::Hint && self.hint_filter => (
                 format!(
                     " filter: {}  {} matches",
-                    self.filter.text,
+                    self.filter.text(),
                     self.filter.left(&self.hints).len()
                 ),
                 String::new(),
