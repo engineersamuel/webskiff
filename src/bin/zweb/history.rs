@@ -221,7 +221,9 @@ impl Saver {
     pub fn finish(&mut self, history: &History) {
         self.to_thread = None;
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            if thread.join().is_err() {
+                eprintln!("webskiff: history writer thread panicked");
+            }
         }
         if self.saved_gen.load(Ordering::Relaxed) < self.changed_gen {
             Self::save_snapshot(history, &self.path, self.changed_gen, &self.saved_gen);
