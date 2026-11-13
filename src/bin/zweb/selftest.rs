@@ -4,17 +4,20 @@
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use flate2::{write::ZlibEncoder, Compression};
 use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse};
 use zebkit::page::DialogPolicy;
 use zebkit::{LoadEvent, View};
 
-use crate::app::{visual_script, yank, FIND_JS, HINTS_JS, VISUAL_START_JS, YANK_JS};
-use crate::config::Action;
+use crate::app::{
+    visual_script, yank, App, Msg, Options, APP, FIND_JS, HINTS_JS, VISUAL_START_JS, YANK_JS,
+};
+use crate::config::{Action, Config};
 use crate::{keys, render};
 
 const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:16px sans-serif}
@@ -64,6 +67,36 @@ fn click(view: &View, x: f32, y: f32) {
     view.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, Modifiers::NONE);
     view.send_mouse(ZMouse::Down, x, y, MouseButton::Left, 1, Modifiers::NONE);
     view.send_mouse(ZMouse::Up, x, y, MouseButton::Left, 1, Modifiers::NONE);
+}
+
+const APP_PAGE: &str =
+    "data:text/html,<style>*{margin:0}</style><p style='font:16px sans-serif'>hello world</p>";
+
+/// Gives the app `codes` in one turn, as keys typed together come, then
+/// stores [in Visual mode, the page selection] as `window.<name>` on `report`.
+fn app_keys(report: &View, name: &'static str, codes: &[KeyCode]) {
+    APP.with(|a| {
+        let mut a = a.borrow_mut();
+        let app = a.as_mut().expect("app");
+        for &code in codes {
+            app.handle(Msg::Term(Event::Key(key(code, KeyModifiers::NONE))));
+        }
+    });
+    let report = report.clone();
+    zebkit::after(Duration::from_millis(400), move || {
+        let (visual, page) = APP.with(|a| {
+            let a = a.borrow();
+            let app = a.as_ref().expect("app");
+            (app.in_visual(), app.view())
+        });
+        page.evaluate("getSelection().toString()", move |r| {
+            let sel = r.unwrap_or_default();
+            report.evaluate(
+                &format!("window.{name}=JSON.stringify([{visual},{sel}])"),
+                |_| {},
+            );
+        });
+    });
 }
 
 fn steps() -> Vec<(&'static str, Act, Check)> {
@@ -274,6 +307,48 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                 "JSON.stringify([window.none, window.some, window.got])",
                 "\"[false,true,\\\"v\\\"]\"",
             ),
+        ),
+        (
+            "app: opens a page through its own tab",
+            Box::new(|_, _| {
+                let renderer = Arc::new(render::Renderer::new(render::Gfx::KittyDirect));
+                *renderer.layout.lock().unwrap() = render::Layout {
+                    top: 1,
+                    cols: 100,
+                    rows: 37,
+                    css_w: 800,
+                    css_h: 600,
+                    ..Default::default()
+                };
+                let opts = Options {
+                    scale: Some(1),
+                    placeholders: false,
+                    enhanced: false,
+                };
+                let mut app = App::new(renderer, opts, Config::parse("").unwrap());
+                app.open_tab(Some(APP_PAGE), None);
+                APP.with(|a| *a.borrow_mut() = Some(app));
+            }),
+            Check::None,
+        ),
+        (
+            "app: v then l at once select two characters in VISUAL",
+            Box::new(|_, v| app_keys(v, "vl", &[KeyCode::Char('v'), KeyCode::Char('l')])),
+            Check::Js("window.vl", "\"[true,\\\"he\\\"]\""),
+        ),
+        (
+            "app: v then Esc at once end in Browse with no selection",
+            Box::new(|_, v| app_keys(v, "vesc", &[KeyCode::Esc, KeyCode::Char('v'), KeyCode::Esc])),
+            Check::Js("window.vesc", "\"[false,\\\"\\\"]\""),
+        ),
+        (
+            "app: v on a page with no text returns to Browse",
+            Box::new(|_, v| {
+                let page = APP.with(|a| a.borrow().as_ref().expect("app").view());
+                page.evaluate("document.body.textContent=''", |_| {});
+                app_keys(v, "vnone", &[KeyCode::Char('v')]);
+            }),
+            Check::Js("window.vnone", "\"[false,\\\"\\\"]\""),
         ),
         (
             "frame cost at 1280x800 CSS, scale 1",

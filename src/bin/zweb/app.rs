@@ -108,9 +108,9 @@ pub enum Msg {
         path: PathBuf,
         ok: bool,
     },
-    /// `__zwebCaret.start()` found text to select.
+    /// `__zwebCaret.start()` of Visual session `session` found text, or not.
     VisualStarted {
-        tab: u64,
+        session: u64,
         ok: bool,
     },
     Yanked {
@@ -366,6 +366,8 @@ pub struct App {
     /// The dim layer's colour of the hints shown.
     hint_dim: Option<[u8; 4]>,
     hint_new_tab: bool,
+    /// Bumped by each `v`: a start reply counts only for the newest one.
+    visual_session: u64,
     /// Hints were shown in this session: read them ahead from now on.
     hints_used: bool,
     find: String,
@@ -417,6 +419,7 @@ impl App {
             hint_typed: String::new(),
             hint_dim: None,
             hint_new_tab: false,
+            visual_session: 0,
             hints_used: false,
             find: String::new(),
             find_generation: 0,
@@ -664,8 +667,13 @@ impl App {
         &self.tabs[self.active]
     }
 
-    fn view(&self) -> View {
+    pub(crate) fn view(&self) -> View {
         self.tab().view.clone()
+    }
+
+    /// For the self-test: the app is in Visual mode.
+    pub(crate) fn in_visual(&self) -> bool {
+        self.mode == Mode::Visual
     }
 
     fn index_of(&self, id: u64) -> Option<usize> {
@@ -705,7 +713,7 @@ impl App {
             Msg::EditText { tab, json } => self.edit_text(tab, json),
             Msg::EditDone { tab, path, edited } => self.edit_done(tab, path, edited),
             Msg::EditWritten { path, ok } => self.edit_written(path, ok),
-            Msg::VisualStarted { tab, ok } => self.visual_started(tab, ok),
+            Msg::VisualStarted { session, ok } => self.visual_started(session, ok),
             Msg::Yanked { tab, text } => self.yanked(tab, text),
             Msg::Tick => self.tick(),
         }
@@ -1604,29 +1612,28 @@ impl App {
 
     // ---- Visual ----
 
+    /// Visual mode starts at once: the page runs scripts in order, so the
+    /// keys that follow act on the selection the start script makes.
     fn start_visual(&mut self) {
-        let tab = self.tab().id;
+        self.visual_session += 1;
+        let session = self.visual_session;
+        self.mode = Mode::Visual;
         self.view().evaluate(VISUAL_START_JS, move |r| {
             send(Msg::VisualStarted {
-                tab,
+                session,
                 ok: r.as_deref() == Ok("true"),
             })
         });
     }
 
-    fn visual_started(&mut self, tab: u64, ok: bool) {
-        if self.index_of(tab) != Some(self.active)
-            || self.mode != Mode::Browse
-            || self.prompt.is_some()
-            || self.help
-        {
+    /// Any change of mode or tab since the start ends Visual: only a fail of
+    /// the session still open has effect.
+    fn visual_started(&mut self, session: u64, ok: bool) {
+        if ok || self.mode != Mode::Visual || session != self.visual_session {
             return;
         }
-        if ok {
-            self.mode = Mode::Visual;
-        } else {
-            self.message = "no text here".into();
-        }
+        self.mode = Mode::Browse;
+        self.message = "no text here".into();
         self.draw();
     }
 
