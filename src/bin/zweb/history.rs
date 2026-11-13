@@ -479,6 +479,24 @@ mod tests {
     }
 
     #[test]
+    fn history_saver_saves_on_finish_after_writer_thread_panics() {
+        let dir = temp_dir("saver-panicked");
+        let path = dir.join("history.tsv");
+        let mut saver = Saver::spawn(path.clone());
+        saver.to_thread = None;
+        saver.thread.take().unwrap().join().unwrap();
+        saver.thread = Some(std::thread::spawn(|| panic!("simulated history writer panic")));
+        let mut history = History::default();
+        assert!(history.visit("https://first.example/", NOW));
+        saver.changed(Instant::now());
+
+        saver.finish(&history);
+        let loaded = History::load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded.get("https://first.example/").unwrap().visits, 1);
+    }
+
+    #[test]
     fn history_saver_does_not_create_a_file_without_changes() {
         let dir = temp_dir("saver-unchanged");
         let path = dir.join("history.tsv");
