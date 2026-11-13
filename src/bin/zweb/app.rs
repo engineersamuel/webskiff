@@ -35,6 +35,8 @@ use zebkit::{after, View as TabView};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
+pub const FOCUS_INPUT_JS: &str = "(()=>{const e=[...document.querySelectorAll('input:not([type=hidden]),textarea,[contenteditable]')]\
+    .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
 const EDITABLE_JS: &str = concat!(editable!(), "(document.activeElement)");
 /// Defines `__zwebCaret` (caret.js) and starts a one-character selection; `false` if no text is visible.
 pub const VISUAL_START_JS: &str = concat!(include_str!("caret.js"), ";__zwebCaret.start()");
@@ -1596,9 +1598,7 @@ impl App {
     fn page_command(&mut self, action: Action) -> bool {
         match action {
             Action::FocusInput => {
-                let focus = "(()=>{const e=[...document.querySelectorAll('input:not([type=hidden]),textarea,[contenteditable]')]\
-                    .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
-                self.view().evaluate(focus, |r| {
+                self.view().evaluate(FOCUS_INPUT_JS, |r| {
                     send(Msg::Focused {
                         ok: r.as_deref() == Ok("true"),
                     })
