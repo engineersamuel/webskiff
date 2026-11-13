@@ -142,18 +142,18 @@ def percentile(values, fraction):
     return values[min(int(len(values) * fraction), len(values) - 1)] if values else None
 
 
-def wait_for_fixture():
+def wait_for_fixture(text=b"keyboard fixture"):
     output = bytearray()
     deadline = time.monotonic() + 20
     terminal = select.poll()
     terminal.register(fd, select.POLLHUP)
     while time.monotonic() < deadline:
         output.extend(b"".join(data for _, data in pump(0.1)))
-        if b"keyboard fixture" in output:
+        if text in output:
             return
         if terminal.poll(0):
             break
-    raise AssertionError(f"keyboard fixture did not load: {bytes(output[-3000:])!r}")
+    raise AssertionError(f"{text!r} did not appear: {bytes(output[-3000:])!r}")
 
 
 try:
@@ -188,14 +188,13 @@ try:
         # Jumplist: Ctrl-O goes back and Ctrl-I forward, within a tab and across tabs.
         press(b"o", expected="OPEN")
         press((fixture + "?jump").encode() + b"\r")
-        pump(1)
-        press(b"\x1b[111;5u", expected="keyboard.html ")
-        pump(1)
-        press(b"\x1b[105;5u", expected="keyboard.html?jump ")
-        pump(1)
+        wait_for_fixture(b"jump page")
+        os.write(fd, b"\x1b[111;5u")
+        wait_for_fixture(b"keyboard fixture")
+        os.write(fd, b"\x1b[105;5u")
+        wait_for_fixture(b"jump page")
         press(b"t", expected="NEW TAB")
         press((fixture + "?tab=2").encode() + b"\r", expected="\x1b[7m 2")
-        pump(1)
         press(b"\x1b[111;5u", expected="\x1b[7m 1")
         press(b"\x1b[105;5u", expected="\x1b[7m 2")
         press(b"\x1b[113;5u")

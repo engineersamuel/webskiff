@@ -17,6 +17,9 @@
 <p id="second">alpha beta gamma</p>
 <p id="browser">Browser Browser</p>
 <script>
+  if (new URLSearchParams(location.search).has("jump")) {
+    document.title = "jump page";
+  }
   if (new URLSearchParams(location.search).has("tab")) {
     document.getElementById("first").textContent = "Second tab: alpha alphabet alpha";
   }
