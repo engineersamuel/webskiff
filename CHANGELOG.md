@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.5...v0.1.0) (2026-11-13)
+
+
+### Features
+
+* page history with frecency completion in the Open prompts ([#26](https://github.com/engineersamuel/webskiff/issues/26)) ([6325a83](https://github.com/engineersamuel/webskiff/commit/6325a83c6a250e9e54a56656cbcc2ba15a9ee08a))
+
 ## [0.1.0-beta.5](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.4...v0.1.0-beta.5) (2026-11-12)
 
 
