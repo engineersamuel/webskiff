@@ -136,9 +136,10 @@ Use `[]` to disable an action. Invalid or conflicting bindings stop startup with
 an error. Restart after editing. Help always shows the configured bindings.
 
 `leader` (default `,`) sets the key that `Leader` means in a binding.
-`Leader r` binds `, r`. Leader works only in `[keys.browse]`, for two-key
-sequences, with no timeout. No default binding uses it. The leader must not also
-be a single-key browse action: `leader = "Space"` conflicts with `page_down`.
+`Leader r` binds `, r`. Two-key `Leader <key>` sequences work only in `[keys.browse]`, with no timeout.
+The leader is a prefix only if a browse binding uses it. Then it must not also be
+a single-key browse action: `leader = "Space"` plus `Leader x` conflicts with
+`page_down` and stops startup.
 Help shows `Leader: <key>`.
 
 ## Support
