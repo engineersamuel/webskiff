@@ -3020,6 +3020,9 @@ mod tests {
             ("file:///tmp/a.html", Some("file:///tmp/")),
             ("about:blank", None),
             ("data:text/html,a/b", None),
+            ("data:text/plain,https://a.com/x/y", None),
+            ("blob:https://a.com/1234-uuid", None),
+            ("about:blank#https://a.com/x", None),
         ] {
             assert_eq!(url_up(url).as_deref(), want, "{url}");
         }
@@ -3033,6 +3036,9 @@ mod tests {
             ("about:blank", None),
             ("https://a.com/", None),
             ("https://a.com?q=1", Some("https://a.com/")),
+            ("data:text/plain,https://a.com/x/y", None),
+            ("blob:https://a.com/1234-uuid", None),
+            ("about:blank#https://a.com/x", None),
         ] {
             assert_eq!(url_root(url).as_deref(), want, "{url}");
         }
