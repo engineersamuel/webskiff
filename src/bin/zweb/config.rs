@@ -26,6 +26,7 @@ actions! {
     NextTab => "next_tab", "Next browser tab";
     PreviousTab => "previous_tab", "Previous browser tab";
     AlternateTab => "alternate_tab", "Switch to the previously active tab";
+    TabPicker => "tab_picker", "Pick a browser tab by name";
     Find => "find", "Find text in this page";
     NextMatch => "next_match", "Next page match";
     PreviousMatch => "previous_match", "Previous page match";
