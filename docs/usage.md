@@ -35,6 +35,8 @@ Prompts support arrows, Home/End, Delete/Backspace, paste at the cursor,
 Ctrl-U to clear, and Ctrl-W to delete a word. Focused page text fields receive
 typing; Escape returns to browser shortcuts. Pages that focus an input on load
 may therefore require Escape before browser shortcuts work.
+`g e` opens the focused text field, or the one just left with Escape, in
+`$VISUAL`/`$EDITOR` (else `vi`) and writes the saved text back.
 
 Help (`?`/F1) is terminal text. Scroll with arrows or `j`/`k`, page with
 Page Up/Down or Space, and jump with Home/End. Escape or `?` closes it.
