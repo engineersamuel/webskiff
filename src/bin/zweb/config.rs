@@ -628,6 +628,33 @@ mod tests {
     }
 
     #[test]
+    fn default_g_chords_navigate_urls_and_pages() {
+        let config = Config::parse("").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("missing g prefix"),
+        };
+        for (key, want) in [
+            ("u", Action::UrlUp),
+            ("U", Action::UrlRoot),
+            ("]", Action::NextPage),
+            ("[", Action::PreviousPage),
+        ] {
+            let Stroke(code, modifiers) = Stroke::parse(key).unwrap();
+            let got = config.resolve(Scope::Browse, KeyEvent::new(code, modifiers), Some(prefix));
+            assert!(
+                matches!(got, Binding::Action(action) if action == want),
+                "g {key}"
+            );
+        }
+        assert_eq!(action(&config, Scope::Browse, "]"), Some(Action::NextTab));
+        assert_eq!(
+            action(&config, Scope::Browse, "["),
+            Some(Action::PreviousTab)
+        );
+    }
+
+    #[test]
     fn g_e_edits_the_text_field_externally() {
         let config = Config::parse("").unwrap();
         let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None) {

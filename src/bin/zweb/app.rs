@@ -2945,4 +2945,36 @@ mod tests {
     fn yank_of_an_empty_selection_writes_nothing() {
         assert_eq!(super::yank(""), (None, "nothing selected".to_string()));
     }
+
+    #[test]
+    fn url_up_strips_query_and_fragment_then_drops_a_segment() {
+        use super::url_up;
+        for (url, want) in [
+            ("https://a.com/x/y/z", Some("https://a.com/x/y/")),
+            ("https://a.com/x/y/", Some("https://a.com/x/")),
+            ("https://a.com/x?q=1", Some("https://a.com/x")),
+            ("https://a.com/x#f", Some("https://a.com/x")),
+            ("https://a.com/", None),
+            ("https://a.com:8443/x", Some("https://a.com:8443/")),
+            ("https://a.com/x/", Some("https://a.com/")),
+            ("file:///tmp/a.html", Some("file:///tmp/")),
+            ("about:blank", None),
+            ("data:text/html,a/b", None),
+        ] {
+            assert_eq!(url_up(url).as_deref(), want, "{url}");
+        }
+    }
+
+    #[test]
+    fn url_root_keeps_scheme_host_and_port() {
+        use super::url_root;
+        for (url, want) in [
+            ("https://a.com:8443/x/y?q=1#f", Some("https://a.com:8443/")),
+            ("about:blank", None),
+            ("https://a.com/", None),
+            ("https://a.com?q=1", Some("https://a.com/")),
+        ] {
+            assert_eq!(url_root(url).as_deref(), want, "{url}");
+        }
+    }
 }
