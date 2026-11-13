@@ -63,6 +63,8 @@ struct Pending {
     /// Forget what was learned of the page (new page, other tab).
     forget: bool,
     clear_popup: bool,
+    /// Page rows to leave to text at the bottom (the prefix popup), or Some(0).
+    cover: Option<u16>,
     /// The hint overlay to show, or Some(None) to remove it.
     hop: Option<Option<Hop>>,
     clear_all: bool,
@@ -384,6 +386,8 @@ struct Rows {
     drawn_at: Instant,
     /// Hash of the hint overlay the terminal holds: shown again, it is only placed.
     hop_sent: Option<u64>,
+    /// Bottom page rows left to text: no tiles are placed there.
+    cover: u16,
 }
 
 impl Rows {
@@ -406,6 +410,7 @@ impl Rows {
             refine: HashMap::new(),
             drawn_at: Instant::now(),
             hop_sent: None,
+            cover: 0,
         }
     }
 
@@ -429,11 +434,29 @@ impl Rows {
         (r as u16, col(b), col(b + 1) - col(b))
     }
 
+    fn covered(&self, layout: &Layout, t: usize) -> bool {
+        t / self.bands + self.cover as usize >= layout.rows as usize
+    }
+
+    /// Leaves the bottom `n` page rows to text: their tiles go, and are drawn
+    /// again by the next frame once uncovered.
+    fn set_cover(&mut self, out: &mut Vec<u8>, layout: &Layout, n: u16, kitty: bool) {
+        self.cover = n;
+        for t in 0..self.shown.len() {
+            if self.covered(layout, t) {
+                if kitty {
+                    self.unplace(out, t, self.shown[t]);
+                }
+                self.shown[t] = None;
+            }
+        }
+    }
+
     /// Puts image `hash` (a cached tile, or BLANK) at tile `t`, then removes
     /// what was there. Returns whether a placement was written.
     fn place(&mut self, out: &mut Vec<u8>, layout: &Layout, t: usize, hash: u64) -> bool {
         let old = self.shown[t];
-        if old == Some(hash) {
+        if old == Some(hash) || self.covered(layout, t) {
             return false;
         }
         let id = if hash == BLANK {
@@ -692,6 +715,7 @@ impl Pending {
             || !self.text.is_empty()
             || self.predict != 0
             || self.clear_popup
+            || self.cover.is_some()
             || self.hop.is_some()
             || self.clear_all
             || self.forget
@@ -749,6 +773,12 @@ impl Renderer {
 
     pub fn clear_popup(&self) {
         self.pending.lock().unwrap().clear_popup = true;
+        self.wake.notify_one();
+    }
+
+    /// Leaves the bottom `rows` page rows to text; 0 gives them back.
+    pub fn cover(&self, rows: u16) {
+        self.pending.lock().unwrap().cover = Some(rows);
         self.wake.notify_one();
     }
 
@@ -845,6 +875,9 @@ impl Renderer {
     fn write_pending(&self, pending: &Pending, layout: &Layout, rows: &mut Rows) {
         let mut out = Vec::new();
         self.clear_pending(pending, rows, &mut out);
+        if let Some(n) = pending.cover {
+            rows.set_cover(&mut out, layout, n, self.gfx != Gfx::Blocks);
+        }
         out.extend_from_slice(&pending.text);
         if pending.predict != 0 && self.gfx != Gfx::Blocks {
             self.show_prediction(&mut out, layout, rows, pending.predict);
@@ -1162,7 +1195,7 @@ impl Renderer {
         let mut parts: Vec<Part> = Vec::new();
         for t in 0..hashes.len() {
             let hash = hashes[t];
-            if rows.shown[t] == Some(hash) {
+            if rows.shown[t] == Some(hash) || rows.covered(layout, t) {
                 continue;
             }
             if self.gfx == Gfx::Blocks {

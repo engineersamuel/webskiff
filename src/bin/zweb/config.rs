@@ -204,12 +204,14 @@ struct ModeKeys {
     actions: HashMap<Vec<Stroke>, Action>,
     prefixes: HashSet<Stroke>,
     labels: HashMap<Action, Vec<String>>,
+    /// Per prefix: each second key's label and its action's description, sorted.
+    continuations: HashMap<Stroke, Vec<(String, &'static str)>>,
 }
 
 impl ModeKeys {
     fn add(
         &mut self,
-        action: Action,
+        (action, description): (Action, &'static str),
         label: &str,
         scope: Scope,
         leader: Stroke,
@@ -236,6 +238,10 @@ impl ModeKeys {
         }
         if keys.len() == 2 {
             self.prefixes.insert(keys[0]);
+            let second = label.split_whitespace().nth(1).unwrap_or_default();
+            let list = self.continuations.entry(keys[0]).or_default();
+            list.push((second.into(), description));
+            list.sort();
         }
         self.labels.entry(action).or_default().push(label.into());
         Ok(())
@@ -324,10 +330,10 @@ impl Config {
     ) -> Result<(), String> {
         let mode = &mut self.modes[scope as usize];
         for (command, value) in table {
-            let action = ACTIONS
+            let (action, description) = ACTIONS
                 .iter()
                 .find(|(key, _, _)| *key == command)
-                .map(|(_, action, _)| *action)
+                .map(|(_, action, description)| (*action, *description))
                 .ok_or_else(|| format!("unknown action keys.{name}.{command}"))?;
             if !allowed(scope, action) {
                 return Err(format!("{command} is not available in {name} mode"));
@@ -339,7 +345,7 @@ impl Config {
                 let key = value
                     .as_str()
                     .ok_or_else(|| format!("keys.{name}.{command} contains a non-string key"))?;
-                mode.add(action, key, scope, leader)
+                mode.add((action, description), key, scope, leader)
                     .map_err(|e| format!("keys.{name}.{command}: {e}"))?;
             }
         }
@@ -368,6 +374,14 @@ impl Config {
             Binding::Action(action) => Some(action),
             _ => None,
         }
+    }
+
+    /// The second keys after `prefix`, each with its action's description.
+    pub fn continuations(&self, scope: Scope, prefix: Stroke) -> &[(String, &'static str)] {
+        self.modes[scope as usize]
+            .continuations
+            .get(&prefix)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn labels(&self, scope: Scope, action: Action) -> String {

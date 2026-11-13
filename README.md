@@ -141,6 +141,7 @@ The leader is a prefix only if a browse binding uses it. Then it must not also b
 a single-key browse action: `leader = "Space"` plus `Leader x` conflicts with
 `page_down` and stops startup.
 Help shows `Leader: <key>`.
+After a prefix key (`g`, the leader, or your own), a popup lists each next key and its action; `Esc` cancels the prefix and is not sent to the page.
 
 ## Support
 
