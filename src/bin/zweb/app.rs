@@ -478,6 +478,8 @@ pub struct App {
     visual_session: u64,
     /// Hints were shown in this session: read them ahead from now on.
     hints_used: bool,
+    /// `g f` was used: its hints (digit codes) are read ahead too.
+    filter_used: bool,
     find: String,
     find_generation: u64,
     message: String,
@@ -534,6 +536,7 @@ impl App {
             hint_new_tab: false,
             visual_session: 0,
             hints_used: false,
+            filter_used: false,
             find: String::new(),
             find_generation: 0,
             message,
@@ -1079,7 +1082,10 @@ impl App {
         {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
-            for filter in [false, true] {
+            for filter in [false, true]
+                .into_iter()
+                .filter(|&f| !f || self.filter_used)
+            {
                 crate::trace!("hints prepare");
                 self.view().evaluate(
                     &format!(
@@ -1653,6 +1659,7 @@ impl App {
 
     fn start_hints(&mut self, new_tab: bool, filter: bool) {
         self.hints_used = true;
+        self.filter_used |= filter;
         self.mode = Mode::Hint;
         self.hint_new_tab = new_tab;
         self.hint_filter = filter;
