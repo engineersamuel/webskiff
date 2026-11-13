@@ -185,6 +185,19 @@ try:
         press(b"/")
         press(b"\x1b[27u", expected="BROWSE")
         assert termios.tcgetattr(fd)[3] & raw_flags == 0, "raw mode was lost during search"
+        # Jumplist: Ctrl-O goes back and Ctrl-I forward, within a tab and across tabs.
+        press(b"o", expected="OPEN")
+        press((fixture + "?jump").encode() + b"\r")
+        pump(1)
+        press(b"\x1b[111;5u", expected="keyboard.html ")
+        pump(1)
+        press(b"\x1b[105;5u", expected="keyboard.html?jump ")
+        pump(1)
+        press(b"t", expected="NEW TAB")
+        press((fixture + "?tab=2").encode() + b"\r", expected="\x1b[7m 2")
+        pump(1)
+        press(b"\x1b[111;5u", expected="\x1b[7m 1")
+        press(b"\x1b[105;5u", expected="\x1b[7m 2")
         press(b"\x1b[113;5u")
         pump(2)
         assert termios.tcgetattr(fd)[3] & raw_flags == original_flags & raw_flags, "terminal flags were not restored"

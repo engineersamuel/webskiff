@@ -17,6 +17,7 @@ mod config;
 mod edit;
 mod history;
 mod input;
+mod jumps;
 mod keys;
 mod render;
 mod selftest;

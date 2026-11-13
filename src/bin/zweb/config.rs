@@ -488,11 +488,11 @@ mod tests {
             Some(Action::ScrollDown)
         );
         assert!(config
-            .help_lines()
+            .help_lines(false)
             .iter()
             .any(|line| line.contains("Ctrl-S")));
         assert!(!config
-            .help_lines()
+            .help_lines(false)
             .iter()
             .any(|line| line.contains("Ctrl-F")));
     }
@@ -542,6 +542,18 @@ mod tests {
     }
 
     #[test]
+    fn default_browse_keys_jump_and_keep_tab_for_focus() {
+        let config = Config::parse("").unwrap();
+        for (event, expected) in [
+            (KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL), Action::JumpBack),
+            (KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL), Action::JumpForward),
+            (KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), Action::FocusNext),
+        ] {
+            assert_eq!(config.action(Scope::Browse, event), Some(expected), "{event:?}");
+        }
+    }
+
+    #[test]
     fn default_reopen_and_alternate_tab_bindings() {
         let config = Config::parse("").unwrap();
         assert_eq!(action(&config, Scope::Browse, "X"), Some(Action::ReopenTab));
@@ -561,6 +573,23 @@ mod tests {
             config.action(Scope::Browse, KeyEvent::from(KeyCode::Char('^'))),
             Some(Action::AlternateTab)
         );
+    }
+
+    #[test]
+    fn help_lists_ctrl_i_only_with_keyboard_enhancement() {
+        let config = Config::parse("").unwrap();
+        let has_ctrl_i = |enhanced| {
+            config
+                .help_lines(enhanced)
+                .iter()
+                .any(|line| line.contains("Ctrl-I"))
+        };
+        assert!(!has_ctrl_i(false));
+        assert!(has_ctrl_i(true));
+        assert!(config
+            .help_lines(false)
+            .iter()
+            .any(|line| line.starts_with("Ctrl-O: ")));
     }
 
     #[test]
