@@ -142,8 +142,10 @@ other terminals and multiplexers need their own acceptance tests.
 - Video is experimental. A tested opt-in setting improves local frame delivery
   but increases CPU/traffic risks. Real YouTube presentation and audio/video sync
   remain unverified. See [measurements and video](docs/performance.md).
-- Downloads, uploads, bookmarks, and a history list are not implemented as
-  supported terminal workflows.
+- Downloads, uploads, and bookmarks are not implemented as supported terminal
+  workflows. Page history is kept for address completion only: Tab in the `o`
+  and `t` prompts. There is no history list view. See
+  [usage](docs/usage.md#data-and-diagnostics) for its file.
 - SSO/MFA, corporate proxies/certificates, DRM, screen readers, and IME behavior
   have not been accepted for production use.
 - Pixels in a terminal are not a screen-reader interface. No WCAG conformance
