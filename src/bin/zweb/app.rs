@@ -315,6 +315,11 @@ impl Tab {
             self.load_generation.set(self.load_generation.get() + 1);
         }
     }
+
+    /// The title, or the URL while there is none.
+    fn name(&self) -> &str {
+        if self.title.is_empty() { self.url() } else { &self.title }
+    }
 }
 
 struct Hint {
@@ -2456,16 +2461,11 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let name = if t.title.is_empty() {
-                    t.url()
-                } else {
-                    &t.title
-                };
                 format!(
                     " {}{} {} ",
                     i + 1,
                     if t.loading { "*" } else { "" },
-                    clip(name, 24)
+                    clip(t.name(), 24)
                 )
             })
             .collect()
@@ -2683,8 +2683,7 @@ impl App {
         let mut out = Vec::new();
         let matches = self.tabs.iter().enumerate().filter(|(_, t)| tab_matches(&p.input.text, &t.title, t.url()));
         for (row, (i, t)) in matches.take(l.rows as usize).enumerate() {
-            let name = if t.title.is_empty() { t.url() } else { &t.title };
-            let line = clip(&format!("{}: {name}", i + 1), l.cols.saturating_sub(2) as usize);
+            let line = clip(&format!("{}: {}", i + 1, t.name()), l.cols.saturating_sub(2) as usize);
             let _ = queue!(out, cursor::MoveTo(2, l.top + row as u16), Print(line));
         }
         self.renderer.write(&out);
