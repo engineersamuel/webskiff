@@ -22,8 +22,10 @@ actions! {
     EditAddress => "edit_address", "Edit the current address";
     NewTab => "new_tab", "Open an address or web search in a new tab";
     CloseTab => "close_tab", "Close the current tab";
+    ReopenTab => "reopen_tab", "Reopen the last closed tab";
     NextTab => "next_tab", "Next browser tab";
     PreviousTab => "previous_tab", "Previous browser tab";
+    AlternateTab => "alternate_tab", "Switch to the previously active tab";
     Find => "find", "Find text in this page";
     NextMatch => "next_match", "Next page match";
     PreviousMatch => "previous_match", "Previous page match";
@@ -539,10 +541,7 @@ mod tests {
     #[test]
     fn default_reopen_and_alternate_tab_bindings() {
         let config = Config::parse("").unwrap();
-        assert_eq!(
-            action(&config, Scope::Browse, "X"),
-            Some(Action::ReopenTab)
-        );
+        assert_eq!(action(&config, Scope::Browse, "X"), Some(Action::ReopenTab));
         assert_eq!(
             action(&config, Scope::Browse, "^"),
             Some(Action::AlternateTab)
