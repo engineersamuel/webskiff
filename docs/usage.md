@@ -78,6 +78,9 @@ Legacy paths are intentionally unchanged:
 
 The history file is readable by your user only (mode 0600) and holds at most
 2000 pages. To delete it, quit Webskiff, then run `rm ~/.cache/zweb/history.tsv`.
+History saves run in the background. Failed writes are logged to `zweb.log`;
+they are retried only after a later history change or once on normal quit.
+Quit waits for pending writes and makes one final save attempt if needed.
 
 The profile is durable data despite its current cache location. Do not clear the
 whole cache directory to troubleshoot unless you intend to lose sign-ins.

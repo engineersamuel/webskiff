@@ -4,7 +4,9 @@
 //! seconds) by a background thread, so no key press waits for the disk.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -165,25 +167,37 @@ impl History {
 
 /// Saves snapshots on its own thread, `SAVE_DELAY` after the last change.
 pub struct Saver {
-    to_thread: Option<Sender<History>>,
+    to_thread: Option<Sender<(u64, History)>>,
     thread: Option<JoinHandle<()>>,
     changed_at: Option<Instant>,
+    changed_gen: u64,
+    saved_gen: Arc<AtomicU64>,
+    path: PathBuf,
 }
 
 impl Saver {
     pub fn spawn(path: PathBuf) -> Self {
-        let (to_thread, from_app) = channel::<History>();
+        let (to_thread, from_app) = channel::<(u64, History)>();
+        let saved_gen = Arc::new(AtomicU64::new(0));
+        let thread_saved_gen = Arc::clone(&saved_gen);
+        let thread_path = path.clone();
         let thread = std::thread::spawn(move || {
-            for snapshot in from_app {
-                if let Err(error) = snapshot.save(&path) {
-                    eprintln!("webskiff: cannot save history {}: {error}", path.display());
-                }
+            for (generation, snapshot) in from_app {
+                Self::save_snapshot(&snapshot, &thread_path, generation, &thread_saved_gen);
             }
         });
-        Self { to_thread: Some(to_thread), thread: Some(thread), changed_at: None }
+        Self { to_thread: Some(to_thread), thread: Some(thread), changed_at: None, changed_gen: 0, saved_gen, path }
+    }
+
+    fn save_snapshot(history: &History, path: &Path, generation: u64, saved_gen: &AtomicU64) {
+        match history.save(path) {
+            Ok(()) => saved_gen.store(generation, Ordering::Relaxed),
+            Err(error) => eprintln!("webskiff: cannot save history {}: {error}", path.display()),
+        }
     }
 
     pub fn changed(&mut self, at: Instant) {
+        self.changed_gen += 1;
         self.changed_at = Some(at);
     }
 
@@ -199,18 +213,18 @@ impl Saver {
     fn send(&mut self, history: &History) {
         self.changed_at = None;
         if let Some(to_thread) = &self.to_thread {
-            let _ = to_thread.send(history.clone());
+            let _ = to_thread.send((self.changed_gen, history.clone()));
         }
     }
 
-    /// Saves unsaved changes and waits for the thread to finish writing.
+    /// Drains the writer, then makes one final attempt if changes remain unsaved.
     pub fn finish(&mut self, history: &History) {
-        if self.changed_at.is_some() {
-            self.send(history);
-        }
         self.to_thread = None;
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+        if self.saved_gen.load(Ordering::Relaxed) < self.changed_gen {
+            Self::save_snapshot(history, &self.path, self.changed_gen, &self.saved_gen);
         }
     }
 }
@@ -461,6 +475,42 @@ mod tests {
                 (actual.url.as_str(), actual.visits, actual.last),
                 (expected.url.as_str(), expected.visits, expected.last)
             );
+        }
+    }
+
+    #[test]
+    fn history_saver_does_not_create_a_file_without_changes() {
+        let dir = temp_dir("saver-unchanged");
+        let path = dir.join("history.tsv");
+        Saver::spawn(path.clone()).finish(&History::default());
+        assert!(!path.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn history_saver_saves_the_first_change_without_rewriting_on_finish() {
+        use std::os::unix::fs::MetadataExt;
+        for background in [false, true] {
+            let dir = temp_dir(&format!("saver-first-change-{background}"));
+            let path = dir.join("history.tsv");
+            let start = Instant::now();
+            let mut saver = Saver::spawn(path.clone());
+            let mut history = History::default();
+            history.visit("https://first.example/", NOW);
+            saver.changed(start);
+            if background {
+                assert!(saver.tick(&history, start + SAVE_DELAY));
+                saver.to_thread = None;
+                saver.thread.take().unwrap().join().unwrap();
+            } else {
+                saver.finish(&history);
+            }
+            let loaded = History::load(&path).unwrap();
+            assert_eq!(loaded.get("https://first.example/").unwrap().visits, 1);
+            let inode = std::fs::metadata(&path).unwrap().ino();
+            saver.finish(&history);
+            assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode, "already saved: no replacement");
+            std::fs::remove_dir_all(&dir).unwrap();
         }
     }
 
