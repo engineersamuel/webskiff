@@ -1593,20 +1593,57 @@ mod tests {
 
     #[test]
     fn page_dialogs_cannot_write_terminal_controls() {
-        use super::{clip, clip_start, DialogType, Prompt, PromptKind, TextInput};
+        use super::{clip, clip_start, DialogType, Prompt, PromptKind};
         let payload = "\x1b]52;c;UFdORUQ=\x07\x1b[2J\r\n\t\u{009b}2J";
-        let prompt = Prompt {
-            kind: PromptKind::Dialog(1, DialogType::Prompt),
-            label: format!("prompt: {payload}: "),
-            input: TextInput::new(payload),
-            not_found: false,
-            keep_open: false,
-            hint: String::new(),
-        };
-        for text in [prompt.body(200), prompt.body(18), clip(payload, 200), clip_start(payload, 12)] {
+        let prompt = Prompt::new(PromptKind::Dialog(1, DialogType::Prompt), &format!("prompt: {payload}: "), payload);
+        for text in [prompt.body(200).0, prompt.body(18).0, clip(payload, 200), clip_start(payload, 12)] {
             assert!(!text.chars().any(char::is_control), "{text:?}");
         }
         assert_eq!(clip("Browser / café", 30), "Browser / café");
+    }
+
+    fn two_pages() -> crate::history::History {
+        let mut history = crate::history::History::default();
+        history.visit("https://second.example/", 1_000);
+        for _ in 0..3 {
+            history.visit("https://first.example/", 1_000);
+        }
+        history
+    }
+
+    #[test]
+    fn open_prompts_complete_from_history_with_tab_and_shift_tab() {
+        use super::{Prompt, PromptKind};
+        let history = two_pages();
+        for kind in [PromptKind::Open, PromptKind::OpenTab] {
+            let mut prompt = Prompt::new(kind, "open: ", "EXAMPLE");
+            prompt.complete(&history, false, 1_000);
+            assert_eq!(prompt.input.text, "https://first.example/");
+            prompt.complete(&history, false, 1_000);
+            assert_eq!(prompt.input.text, "https://second.example/");
+            prompt.complete(&history, true, 1_000);
+            assert_eq!(prompt.input.text, "https://first.example/");
+            assert_eq!(prompt.input.cursor, prompt.input.text.len());
+        }
+        let mut find = Prompt::new(PromptKind::Find, "/", "example");
+        find.complete(&history, false, 1_000);
+        assert_eq!(find.input.text, "example");
+    }
+
+    #[test]
+    fn open_prompts_show_the_best_match_dim_after_the_cursor() {
+        use super::{Prompt, PromptKind};
+        let history = two_pages();
+        let mut prompt = Prompt::new(PromptKind::Open, "open: ", "https://fi");
+        prompt.suggest(&history, 1_000);
+        assert_eq!(prompt.body(200), (" open: https://fi█".to_string(), "rst.example/".to_string()));
+        assert_eq!(prompt.body(22).1, "rst.");
+        let mut other = Prompt::new(PromptKind::OpenTab, "new tab: ", "second");
+        other.suggest(&history, 1_000);
+        assert_eq!(other.body(200).1, "  → https://second.example/");
+        let mut find = Prompt::new(PromptKind::Find, "/", "https://fi");
+        find.suggest(&history, 1_000);
+        assert_eq!(find.body(200).1, "");
     }
 }
 

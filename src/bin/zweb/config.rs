@@ -452,6 +452,21 @@ mod tests {
     }
 
     #[test]
+    fn prompt_tab_and_shift_tab_complete_by_default() {
+        let config = Config::parse("").unwrap();
+        assert_eq!(
+            config.action(Scope::Prompt, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            Some(Action::Complete)
+        );
+        assert_eq!(
+            config.action(Scope::Prompt, KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            Some(Action::CompletePrevious)
+        );
+        assert_eq!(action(&config, Scope::Prompt, "Enter"), Some(Action::Accept));
+        assert!(Config::parse("[keys.browse]\ncomplete = ['c']").is_err());
+    }
+
+    #[test]
     fn rejects_invalid_and_conflicting_bindings() {
         for text in [
             "[keys.browse]\nscroll_down = ['k']",
