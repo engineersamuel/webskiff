@@ -2616,6 +2616,20 @@ mod tests {
     }
 
     #[test]
+    fn filter_backspace_removes_the_last_key_typed() {
+        use super::{FilterKey::*, FilterStep::*, HintFilter};
+        let hints = filter_hints_of(
+            r#"[{"k":"11","t":"lake"},{"k":"12","t":"lime"},{"k":"21","t":"love"}]"#,
+        );
+        let mut f = HintFilter::default();
+        assert_eq!(f.key(&hints, Char('1')), Some(Show(vec![0, 1])));
+        assert_eq!(f.key(&hints, Char('l')), Some(Show(vec![0, 1])));
+        // Backspace removes `l`, not `1`: still only codes starting with 1.
+        assert_eq!(f.key(&hints, Back), Some(Show(vec![0, 1])));
+        assert_eq!(f.key(&hints, Back), Some(Show(vec![0, 1, 2])));
+    }
+
+    #[test]
     fn opens_existing_relative_and_absolute_files() {
         let path = std::fs::canonicalize("README.md").unwrap();
         let expected = format!("file://{}", path.display());
