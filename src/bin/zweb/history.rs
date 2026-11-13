@@ -42,6 +42,13 @@ impl Entry {
         entry
     }
 
+    fn parse(line: &str) -> Option<Self> {
+        let mut f = line.splitn(4, '\t');
+        let (url, title) = (f.next()?, f.next()?);
+        let (visits, last) = (f.next()?.parse().ok()?, f.next()?.parse().ok()?);
+        eligible(url).then(|| Self::new(url.into(), title.into(), visits, last))
+    }
+
     fn set_title(&mut self, title: &str) {
         self.title = title.replace(['\t', '\n', '\r'], " ");
         self.title_lc = self.title.to_lowercase();
@@ -69,15 +76,12 @@ impl History {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             text => text?,
         };
-        let entries = text
-            .lines()
-            .filter_map(|line| {
-                let mut f = line.splitn(4, '\t');
-                let (url, title) = (f.next()?, f.next()?);
-                let (visits, last) = (f.next()?.parse().ok()?, f.next()?.parse().ok()?);
-                eligible(url).then(|| Entry::new(url.into(), title.into(), visits, last))
-            })
-            .collect();
+        let mut entries: Vec<Entry> = text.lines().filter_map(Entry::parse).collect();
+        if entries.len() > CAP {
+            let now = now();
+            entries.select_nth_unstable_by_key(CAP, |e| std::cmp::Reverse(e.frecency(now)));
+            entries.truncate(CAP);
+        }
         Ok(Self { entries })
     }
 
@@ -362,6 +366,27 @@ mod tests {
     }
 
     #[test]
+    fn history_load_bounds_oversized_file_to_2000_highest_ranked_entries() {
+        let dir = temp_dir("oversized");
+        let path = dir.join("history.tsv");
+        let mut raw = String::from("https://stale.example/\tStale\t1\t0\n");
+        let recent = now();
+        for i in 0..2000 {
+            raw.push_str(&format!("https://site{i}.example/\tSite {i}\t2\t{recent}\n"));
+        }
+        std::fs::write(&path, raw).unwrap();
+        let mut history = History::load(&path).unwrap();
+        assert_eq!(history.len(), 2000);
+        assert!(history.get("https://stale.example/").is_none());
+        history.visit("https://fresh.example/", recent);
+        history.save(&path).unwrap();
+        let saved = History::load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(saved.len(), 2000);
+        assert!(saved.get("https://fresh.example/").is_some());
+    }
+
+    #[test]
     fn history_load_of_a_missing_file_is_empty() {
         let dir = temp_dir("missing");
         let loaded = History::load(&dir.join("history.tsv")).unwrap();
@@ -406,7 +431,10 @@ mod tests {
     #[test]
     fn history_completion_cycles_through_matches() {
         let mut history = History::default();
-        history.visit("https://second.example/", NOW);
+        history.visit("https://third.example/", NOW);
+        for _ in 0..2 {
+            history.visit("https://second.example/", NOW);
+        }
         for _ in 0..3 {
             history.visit("https://first.example/", NOW);
         }
@@ -414,6 +442,7 @@ mod tests {
         assert_eq!(completion.step(false), Some("https://first.example/"));
         assert_eq!(completion.step(false), Some("https://second.example/"));
         assert_eq!(completion.step(true), Some("https://first.example/"));
+        assert_eq!(completion.step(true), Some("https://third.example/"));
         assert_eq!(Completion::new(&history, "nothing", NOW).step(false), None);
     }
 
