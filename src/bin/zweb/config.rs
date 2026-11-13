@@ -856,6 +856,28 @@ mod tests {
     }
 
     #[test]
+    fn custom_leader_trims_whitespace_and_stores_normalized_label() {
+        let config =
+            Config::parse("leader = ' ; '\n[keys.browse]\nreload = ['Leader r']").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(';')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("expected ';' to be a prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+        assert!(config
+            .help_lines()
+            .iter()
+            .any(|line| line == "Leader: ;"));
+    }
+
+    #[test]
     fn rejects_invalid_and_conflicting_leader_configs() {
         let conflict =
             Config::parse("leader = 'Space'\n[keys.browse]\nreload = ['Leader x']").unwrap_err();
@@ -863,6 +885,8 @@ mod tests {
             conflict.contains("sequence prefix is also bound to a single-key action"),
             "unexpected error: {conflict}"
         );
+        let typo = Config::parse("leadr = ';'").unwrap_err();
+        assert!(typo.contains("leader"), "unexpected error: {typo}");
         for text in [
             "leader = 42",
             "leader = 'g g'",
