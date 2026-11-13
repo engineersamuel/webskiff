@@ -632,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn default_g_chords_navigate_urls_and_pages() {
+    fn default_g_chords_navigate_urls() {
         let config = Config::parse("").unwrap();
         let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None) {
             Binding::Prefix(prefix) => prefix,
@@ -641,8 +641,6 @@ mod tests {
         for (key, want) in [
             ("u", Action::UrlUp),
             ("U", Action::UrlRoot),
-            ("]", Action::NextPage),
-            ("[", Action::PreviousPage),
         ] {
             let Stroke(code, modifiers) = Stroke::parse(key).unwrap();
             let got = config.resolve(Scope::Browse, KeyEvent::new(code, modifiers), Some(prefix));

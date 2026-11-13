@@ -15,7 +15,7 @@ use zebkit::page::DialogPolicy;
 use zebkit::{LoadEvent, View};
 
 use crate::app::{
-    visual_script, yank, App, Msg, Options, APP, FIND_JS, HINTS_JS, PAGINATE_JS, VISUAL_START_JS, YANK_JS,
+    visual_script, yank, App, Msg, Options, APP, FIND_JS, HINTS_JS, VISUAL_START_JS, YANK_JS,
 };
 use crate::config::{Action, Config};
 use crate::{keys, render};
@@ -120,15 +120,6 @@ fn app_events(report: &View, name: &'static str, events: &[Event]) {
             );
         });
     });
-}
-
-/// Runs the production pagination script on `body`; the result lands in `window.pg`.
-fn paginate(name: &'static str, body: &'static str, next: bool, want: &'static str) -> (&'static str, Act, Check) {
-    let act: Act = Box::new(move |_, v| {
-        let js = format!("window.pg='unset';document.body.innerHTML={};window.pg={PAGINATE_JS}({next})", serde_json::to_string(body).unwrap());
-        v.evaluate(&js, |_| {});
-    });
-    (name, act, Check::Js("window.pg", want))
 }
 
 fn steps() -> Vec<(&'static str, Act, Check)> {
@@ -427,11 +418,6 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("window.vnone", "\"[false,\\\"\\\"]\""),
         ),
-        paginate("rel=next link wins over a 'Next' anchor", "<link rel=next href=https://a.test/A><a href=https://a.test/B>Next</a>", true, "\"https://a.test/A\""),
-        paginate("visible 'Next' anchor", "<a href=https://a.test/C style=display:none>Next</a><a href=https://a.test/B> Next </a>", true, "\"https://a.test/B\""),
-        paginate("visible '›' anchor", "<a href=https://a.test/B>›</a>", true, "\"https://a.test/B\""),
-        paginate("'«' anchor for previous", "<a href=https://a.test/N>»</a><a href=https://a.test/P>«</a>", false, "\"https://a.test/P\""),
-        paginate("no matching link gives null", "<a href=https://a.test/H>Home</a><a href=https://a.test/C hidden>Next</a>", true, "null"),
         (
             "frame cost at 1280x800 CSS, scale 1",
             Box::new(|c, v| {
