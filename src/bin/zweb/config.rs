@@ -630,13 +630,18 @@ mod tests {
     }
 
     #[test]
-    fn default_g_chords_navigate_urls() {
+    fn default_g_chords() {
         let config = Config::parse("").unwrap();
         let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None) {
             Binding::Prefix(prefix) => prefix,
             _ => panic!("missing g prefix"),
         };
-        for (key, want) in [("u", Action::UrlUp), ("U", Action::UrlRoot)] {
+        for (key, want) in [
+            ("u", Action::UrlUp),
+            ("U", Action::UrlRoot),
+            ("[", Action::Back),
+            ("]", Action::Forward),
+        ] {
             let Stroke(code, modifiers) = Stroke::parse(key).unwrap();
             let got = config.resolve(Scope::Browse, KeyEvent::new(code, modifiers), Some(prefix));
             assert!(
@@ -644,6 +649,8 @@ mod tests {
                 "g {key}"
             );
         }
+        assert_eq!(action(&config, Scope::Browse, "H"), Some(Action::Back));
+        assert_eq!(action(&config, Scope::Browse, "L"), Some(Action::Forward));
         assert_eq!(action(&config, Scope::Browse, "]"), Some(Action::NextTab));
         assert_eq!(
             action(&config, Scope::Browse, "["),
