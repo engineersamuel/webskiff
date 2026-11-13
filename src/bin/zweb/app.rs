@@ -1600,7 +1600,8 @@ impl App {
     fn page_command(&mut self, action: Action) -> bool {
         match action {
             Action::FocusInput => {
-                self.view().evaluate(FOCUS_INPUT_JS, |r| {
+                let focus = FOCUS_INPUT_JS;
+                self.view().evaluate(focus, |r| {
                     send(Msg::Focused {
                         ok: r.as_deref() == Ok("true"),
                     })
