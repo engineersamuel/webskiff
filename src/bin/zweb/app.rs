@@ -2376,6 +2376,19 @@ mod tests {
     use super::to_url;
 
     #[test]
+    fn hint_filter_returns_original_indices_of_text_matches_ignoring_case() {
+        let list = r#"[{"k":"1","t":"Home Page"},{"k":"2","t":"About"},{"k":"3","t":"HOMEWORK"},{"k":"4"}]"#;
+        let (_, _, hints) = super::parse_hints(&serde_json::to_string(list).unwrap());
+        let filter = |text, typed| super::filter_hints(&hints, text, typed);
+        assert_eq!(filter("home", ""), [0, 2]);
+        assert_eq!(filter("hOmE", ""), [0, 2]);
+        assert_eq!(filter("e p", ""), [0]);
+        assert_eq!(filter("zzz", ""), [] as [usize; 0]);
+        assert_eq!(filter("", ""), [0, 1, 2, 3]);
+        assert_eq!(filter("home", "3"), [2]);
+    }
+
+    #[test]
     fn opens_existing_relative_and_absolute_files() {
         let path = std::fs::canonicalize("README.md").unwrap();
         let expected = format!("file://{}", path.display());

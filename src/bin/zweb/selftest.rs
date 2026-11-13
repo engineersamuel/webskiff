@@ -27,6 +27,7 @@ const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:1
 <button id=b onclick="this.textContent='clicked'">button</button>
 <select id=s><option>one</option><option>two</option></select>
 <button id=w onclick="window.open('about:blank')">popup</button>
+<a id=k href=#k style="position:absolute;left:10px;top:210px">Known  Link</a>
 <a id=t1 href=#a onclick="window.followed=1;return false" style="position:absolute;top:2000px">find target</a>
 <a id=t2 href=#b onclick="window.followed=2;return false" style="position:absolute;top:2100px">other target</a>
 <p id=v style="position:absolute;top:300px">alpha bravo charlie</p>"#;
@@ -170,7 +171,7 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             Check::Js("document.title", "\"submitted:z\""),
         ),
         (
-            "hint script finds 4 targets and its click works",
+            "hint script finds 5 targets with link text and its click works",
             Box::new(|_, v| {
                 let page = v.clone();
                 v.evaluate(HINTS_JS, move |r| {
@@ -197,15 +198,25 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                             h["y"].as_f64().unwrap() as f32,
                         );
                     }
+                    // The visible link #k, at y 210..228: its text, whitespace collapsed.
+                    let text = list
+                        .iter()
+                        .find(|h| (h["y"].as_f64().unwrap_or(0.0) - 219.0).abs() < 10.0)
+                        .and_then(|h| h["t"].as_str())
+                        .unwrap_or("");
+                    let count = if rendered { list.len() } else { 0 };
                     page.evaluate(
-                        &format!("window.hintCount={}", if rendered { list.len() } else { 0 }),
+                        &format!(
+                            "window.hintCount={count};window.hintText={}",
+                            serde_json::to_string(text).unwrap()
+                        ),
                         |_| {},
                     );
                 });
             }),
             Check::Js(
-                "[window.hintCount, b.textContent, !!window.__zwebHop].join()",
-                "\"4,clicked,true\"",
+                "[window.hintCount, b.textContent, !!window.__zwebHop, window.hintText].join()",
+                "\"5,clicked,true,Known Link\"",
             ),
         ),
         (

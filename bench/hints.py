@@ -1,4 +1,7 @@
-"""Measure fresh-session and warm hop hints, including complete PTY output."""
+"""Measure fresh-session and warm hop hints, including complete PTY output.
+
+After the `f` actions, `g f` filtered hints: each filter letter is checked in
+its full PTY output for Kitty PNG transmissions and atlas placements."""
 
 import argparse
 import base64
@@ -25,17 +28,45 @@ def trace_samples(trace, actions):
         (float(match[1]), match[2])
         for match in re.finditer(r"^T +([\d.]+) (.*)$", trace, re.M)
     ]
-    starts = iter(
-        at for at, event in events
-        if event.startswith("input read Key") and re.search(r"Char\('[fa]'\)", event)
-    )
+    reads = [at for at, event in events if event.startswith("input read Key")]
     writes = [at for at, event in events if event == "hints written"]
     samples = []
-    for label, size in actions:
-        start = next(starts)
+    cursor = 0.0
+    for label, key, size, extra in actions:
+        # Each action from its own key read to its own hints written: no
+        # other key read in between.
+        start = next(
+            at for at, event in events
+            if at > cursor and event.startswith("input read Key")
+            and re.search(rf"code: Char\('{key}'\), modifiers: KeyModifiers\(0x0\)", event)
+        )
         end = next(at for at in writes if at > start)
-        samples.append({"action": label, "ms": end - start, "bytes": size})
+        assert not any(start < at < end for at in reads), f"{label}: another key before hints written"
+        samples.append({"action": label, "ms": end - start, "bytes": size, **extra})
+        cursor = start
     return samples
+
+
+def graphics(raw, state):
+    """Kitty graphics commands in `raw`: PNG transmissions (f=100 by a=t, a=T
+    or no a=, and their continuation payloads) and hint placements (a=p)."""
+    png, placed = 0, []
+    for match in re.finditer(rb"\x1b_G([^;\x1b]*)(?:;[^\x1b]*)?\x1b\\", raw):
+        keys = dict(kv.split(b"=", 1) for kv in match[1].split(b",") if b"=" in kv)
+        if state["more"]:
+            png += state["more_png"]
+            state["more"] = keys.get(b"m") == b"1"
+            continue
+        action = keys.get(b"a", b"t")
+        if action in (b"t", b"T"):
+            is_png = keys.get(b"f") == b"100"
+            png += is_png
+            if is_png:
+                state["uploaded"].add(keys.get(b"i"))
+            state["more"], state["more_png"] = keys.get(b"m") == b"1", is_png
+        elif action == b"p":
+            placed.append(keys.get(b"i"))
+    return png, placed
 
 
 def run(binary, scale):
@@ -69,13 +100,27 @@ def run(binary, scale):
             return bytes(output)
 
         actions = []
+        state = {"uploaded": set(), "more": False, "more_png": False}
 
-        def press(label, keys):
+        def press(label, keys, filtering=False):
             os.write(fd, keys)
             raw = pump(0.3)
+            uploaded = set(state["uploaded"])
+            png, placed = graphics(raw, state)
+            # Hint placements: of a PNG image (page tiles are raw pixels).
+            placed = [i for i in placed if i in state["uploaded"]]
             if label:
                 assert b"a=T" in raw or b"a=p" in raw, f"{label}: no hint pixels"
-                actions.append((label, len(raw)))
+                extra = {}
+                if filtering:
+                    shown = re.findall(rb"filter: [^\x1b]*?(\d+) matches", raw)
+                    extra = {
+                        "png": png,
+                        "placed": len(placed),
+                        "matches": int(shown[-1]) if shown else None,
+                        "atlas_before": bool(placed) and all(i in uploaded for i in placed),
+                    }
+                actions.append((label, keys.decode()[-1], len(raw), extra))
 
         try:
             output = pump(0.5)
@@ -93,6 +138,12 @@ def run(binary, scale):
                 press(None, b"\x1b")
             press(None, b"j")
             press("f after scroll", b"f")
+            press(None, b"\x1b")
+            press(None, b"g")
+            press("g f", b"f")
+            for letter in b"link":
+                press("filter letter", bytes([letter]), filtering=True)
+            press(None, b"\x1b")
             press(None, b"\x11")
             _, status = os.waitpid(pid, 0)
             assert status == 0, f"browser exit status: {status}"
@@ -125,6 +176,17 @@ if __name__ == "__main__":
             f"{action:16} p50/p90 {percentile(times, .5):.2f}/{percentile(times, .9):.2f} ms"
             f"  bytes {percentile(sizes, .5)}/{percentile(sizes, .9)} (n={len(group)})"
         )
+    letters = [sample for sample in samples if sample["action"] == "filter letter"]
+    print(
+        f"filter letter    PNG transmissions {sum(s['png'] for s in letters)}"
+        f"  placed == matches {sum(s['placed'] == s['matches'] for s in letters)}/{len(letters)}"
+        f"  matches min {min((s['matches'] or 0) for s in letters)}"
+        f"  a=p of atlas uploaded before {sum(s['atlas_before'] for s in letters)}/{len(letters)}"
+    )
+    assert all(
+        s["png"] == 0 and (s["matches"] or 0) > 1 and s["placed"] == s["matches"] and s["atlas_before"]
+        for s in letters
+    ), "a filter letter sent a PNG, placed a filtered-out hint, or left one match"
     if args.check:
         first = [sample["ms"] for sample in samples if sample["action"] == "first f"]
         assert percentile(first, .9) < 10, "first-f p90 is not below 10 ms"
