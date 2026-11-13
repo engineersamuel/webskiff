@@ -2623,7 +2623,14 @@ pub fn yank(text: &str) -> (Option<Vec<u8>>, String) {
 
 /// `scheme://host[:port]` and the rest, for hierarchical URLs only.
 fn split_url(url: &str) -> Option<(&str, &str)> {
-    let start = url.find("://")? + 3;
+    let (scheme, rest) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !valid || !rest.starts_with("//") {
+        return None;
+    }
+    let start = scheme.len() + 3;
     let end = url[start..].find(['/', '?', '#']).map_or(url.len(), |i| start + i);
     Some(url.split_at(end))
 }
