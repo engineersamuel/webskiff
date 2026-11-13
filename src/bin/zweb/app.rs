@@ -2555,11 +2555,9 @@ impl App {
         let lines = prefix_popup_lines(entries, (l.cols as usize).saturating_sub(2));
         let n = (lines.len() as u16).min(l.rows);
         if n != self.popup_rows.get() {
-            self.popup_rows.set(n);
+            let old = self.popup_rows.replace(n);
             self.renderer.cover(n);
-            // Kitty places the covered tiles again from its copies; blocks
-            // have none, so they need a new frame.
-            if n == 0 && self.renderer.gfx == crate::render::Gfx::Blocks {
+            if self.renderer.gfx.uncover_needs_frame(old, n) {
                 if let Some(t) = self.tabs.get(self.active) {
                     t.view.request_frame();
                 }

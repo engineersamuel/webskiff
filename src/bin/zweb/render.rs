@@ -26,6 +26,15 @@ pub enum Gfx {
     Blocks,
 }
 
+impl Gfx {
+    /// Whether the popup going from `old` to `new` rows needs a new page
+    /// frame. Kitty places the uncovered tiles again from its copies;
+    /// blocks have none.
+    pub fn uncover_needs_frame(self, old: u16, new: u16) -> bool {
+        self == Gfx::Blocks && new < old
+    }
+}
+
 /// Where the page is on screen, and its size in CSS pixels.
 #[derive(Clone, Copy, Default)]
 pub struct Layout {
@@ -1816,6 +1825,14 @@ mod tests {
             "\x1b[4;1H\x1b_Ga=p,i=13,p=4,c=16,r=1,C=1,q=2\x1b\\",
             "\x1b[5;1H\x1b_Ga=p,i=15,p=5,c=16,r=1,C=1,q=2\x1b\\",
         ).as_bytes());
+    }
+
+    #[test]
+    fn blocks_need_a_frame_when_the_popup_exposes_rows() {
+        assert!(Gfx::Blocks.uncover_needs_frame(2, 1), "two entries to one");
+        assert!(Gfx::Blocks.uncover_needs_frame(2, 0));
+        assert!(!Gfx::Blocks.uncover_needs_frame(1, 2));
+        assert!(!Gfx::KittyDirect.uncover_needs_frame(2, 1));
     }
 
     #[test]
