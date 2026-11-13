@@ -1,4 +1,242 @@
 //! Visited pages, ranked by frecency, for completion in the Open prompts.
+//!
+//! Kept in memory; saved as TSV (url, title, visits, last visit in Unix
+//! seconds) by a background thread, so no key press waits for the disk.
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Sender};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const CAP: usize = 2000;
+/// Matches kept for completion.
+const LIMIT: usize = 9;
+const DAY: u64 = 86_400;
+/// (age below, in days; weight). Older pages weigh 10.
+const WEIGHTS: [(u64, u64); 4] = [(4, 100), (14, 70), (31, 50), (90, 30)];
+pub const SAVE_DELAY: Duration = Duration::from_secs(5);
+
+pub fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+fn eligible(url: &str) -> bool {
+    (url.starts_with("http://") || url.starts_with("https://")) && !url.contains(['\t', '\n', '\r'])
+}
+
+#[derive(Clone)]
+pub struct Entry {
+    pub url: String,
+    pub title: String,
+    pub visits: u32,
+    /// Last visit, Unix seconds.
+    pub last: u64,
+    url_lc: String,
+    title_lc: String,
+}
+
+impl Entry {
+    fn new(url: String, title: String, visits: u32, last: u64) -> Self {
+        let mut entry = Self { url_lc: url.to_lowercase(), url, title: String::new(), title_lc: String::new(), visits, last };
+        entry.set_title(&title);
+        entry
+    }
+
+    fn set_title(&mut self, title: &str) {
+        self.title = title.replace(['\t', '\n', '\r'], " ");
+        self.title_lc = self.title.to_lowercase();
+    }
+
+    fn frecency(&self, now: u64) -> u64 {
+        let age = now.saturating_sub(self.last) / DAY;
+        let weight = WEIGHTS.iter().find(|(below, _)| age < *below).map_or(10, |(_, w)| *w);
+        self.visits as u64 * weight
+    }
+
+    fn matches(&self, terms: &[&str]) -> bool {
+        terms.iter().all(|t| self.url_lc.contains(t) || self.title_lc.contains(t))
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct History {
+    entries: Vec<Entry>,
+}
+
+impl History {
+    pub fn load(path: &Path) -> std::io::Result<Self> {
+        let text = match std::fs::read_to_string(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            text => text?,
+        };
+        let entries = text
+            .lines()
+            .filter_map(|line| {
+                let mut f = line.splitn(4, '\t');
+                let (url, title) = (f.next()?, f.next()?);
+                let (visits, last) = (f.next()?.parse().ok()?, f.next()?.parse().ok()?);
+                eligible(url).then(|| Entry::new(url.into(), title.into(), visits, last))
+            })
+            .collect();
+        Ok(Self { entries })
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub fn get(&self, url: &str) -> Option<&Entry> {
+        self.entries.iter().find(|e| e.url == url)
+    }
+
+    /// Counts one visit at `now`. Returns whether the history changed.
+    pub fn visit(&mut self, url: &str, now: u64) -> bool {
+        if !eligible(url) {
+            return false;
+        }
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.url == url) {
+            entry.visits += 1;
+            entry.last = entry.last.max(now);
+            return true;
+        }
+        if self.entries.len() >= CAP {
+            let lowest = self.entries.iter().enumerate().min_by_key(|(_, e)| e.frecency(now)).map(|(i, _)| i);
+            self.entries.swap_remove(lowest.unwrap_or(0));
+        }
+        self.entries.push(Entry::new(url.into(), String::new(), 1, now));
+        true
+    }
+
+    /// Returns whether the history changed.
+    pub fn set_title(&mut self, url: &str, title: &str) -> bool {
+        match self.entries.iter_mut().find(|e| e.url == url) {
+            Some(entry) if !title.trim().is_empty() => {
+                entry.set_title(title);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The best `LIMIT` entries that hold every term of `query`, best first.
+    pub fn top(&self, query: &str, now: u64) -> Vec<&Entry> {
+        let query = query.to_lowercase();
+        let terms: Vec<&str> = query.split_whitespace().collect();
+        let mut best = [(0u64, 0usize); LIMIT];
+        let mut n = 0;
+        for (i, entry) in self.entries.iter().enumerate() {
+            if !entry.matches(&terms) {
+                continue;
+            }
+            let score = entry.frecency(now);
+            if n == LIMIT && score <= best[LIMIT - 1].0 {
+                continue;
+            }
+            let mut at = n.min(LIMIT - 1);
+            n = (n + 1).min(LIMIT);
+            while at > 0 && best[at - 1].0 < score {
+                best[at] = best[at - 1];
+                at -= 1;
+            }
+            best[at] = (score, i);
+        }
+        best[..n].iter().map(|&(_, i)| &self.entries[i]).collect()
+    }
+
+    /// Writes a temporary file readable by the user only, then renames it over `path`.
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let text: String =
+            self.entries.iter().map(|e| format!("{}\t{}\t{}\t{}\n", e.url, e.title, e.visits, e.last)).collect();
+        let tmp = path.with_extension("tsv.tmp");
+        let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(text.as_bytes())?;
+        std::fs::rename(&tmp, path)
+    }
+}
+
+/// Saves snapshots on its own thread, `SAVE_DELAY` after the last change.
+pub struct Saver {
+    to_thread: Option<Sender<History>>,
+    thread: Option<JoinHandle<()>>,
+    changed_at: Option<Instant>,
+}
+
+impl Saver {
+    pub fn spawn(path: PathBuf) -> Self {
+        let (to_thread, from_app) = channel::<History>();
+        let thread = std::thread::spawn(move || {
+            for snapshot in from_app {
+                if let Err(error) = snapshot.save(&path) {
+                    eprintln!("webskiff: cannot save history {}: {error}", path.display());
+                }
+            }
+        });
+        Self { to_thread: Some(to_thread), thread: Some(thread), changed_at: None }
+    }
+
+    pub fn changed(&mut self, at: Instant) {
+        self.changed_at = Some(at);
+    }
+
+    /// Sends a snapshot when the history has been quiet for `SAVE_DELAY`.
+    pub fn tick(&mut self, history: &History, now: Instant) -> bool {
+        if self.changed_at.is_none_or(|at| now < at + SAVE_DELAY) {
+            return false;
+        }
+        self.send(history);
+        true
+    }
+
+    fn send(&mut self, history: &History) {
+        self.changed_at = None;
+        if let Some(to_thread) = &self.to_thread {
+            let _ = to_thread.send(history.clone());
+        }
+    }
+
+    /// Saves unsaved changes and waits for the thread to finish writing.
+    pub fn finish(&mut self, history: &History) {
+        if self.changed_at.is_some() {
+            self.send(history);
+        }
+        self.to_thread = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// One Tab/Shift-Tab session: the matches for the typed text, and the one shown.
+pub struct Completion {
+    urls: Vec<String>,
+    at: Option<usize>,
+}
+
+impl Completion {
+    pub fn new(history: &History, typed: &str, now: u64) -> Self {
+        Self { urls: history.top(typed, now).iter().map(|e| e.url.clone()).collect(), at: None }
+    }
+
+    pub fn step(&mut self, back: bool) -> Option<&str> {
+        let n = self.urls.len();
+        if n == 0 {
+            return None;
+        }
+        let at = match (self.at, back) {
+            (None, false) => 0,
+            (None, true) => n - 1,
+            (Some(i), false) => (i + 1) % n,
+            (Some(i), true) => (i + n - 1) % n,
+        };
+        self.at = Some(at);
+        Some(&self.urls[at])
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -146,16 +384,20 @@ mod tests {
     }
 
     #[test]
-    fn history_saver_writes_the_last_snapshot_when_finished() {
+    fn history_saver_waits_for_quiet_and_saves_on_finish() {
         let dir = temp_dir("saver");
         let path = dir.join("history.tsv");
-        let mut saver = Saver::spawn(path.clone(), std::time::Duration::from_secs(3600));
+        let start = std::time::Instant::now();
+        let mut saver = Saver::spawn(path.clone());
         let mut history = History::default();
         history.visit("https://first.example/", NOW);
-        saver.save(&history);
+        saver.changed(start);
+        assert!(!saver.tick(&history, start + SAVE_DELAY / 2));
+        assert!(saver.tick(&history, start + SAVE_DELAY));
+        assert!(!saver.tick(&history, start + 2 * SAVE_DELAY));
         history.visit("https://second.example/", NOW);
-        saver.save(&history);
-        saver.finish();
+        saver.changed(start);
+        saver.finish(&history);
         let loaded = History::load(&path).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(loaded.len(), 2);

@@ -76,6 +76,8 @@ actions! {
     Delete => "delete", "Delete after the cursor";
     Clear => "clear", "Clear the prompt";
     DeleteWord => "delete_word", "Delete the word before the cursor";
+    Complete => "complete", "Complete the address from history (next match)";
+    CompletePrevious => "complete_previous", "Previous history match";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,6 +394,8 @@ fn allowed(scope: Scope, action: Action) -> bool {
                 | Delete
                 | Clear
                 | DeleteWord
+                | Complete
+                | CompletePrevious
         ),
         Scope::Insert => action == Cancel,
         Scope::Hint => matches!(action, Cancel | Backspace),
@@ -409,6 +413,8 @@ fn allowed(scope: Scope, action: Action) -> bool {
                 | Delete
                 | Clear
                 | DeleteWord
+                | Complete
+                | CompletePrevious
         ),
         Scope::Help => matches!(
             action,
