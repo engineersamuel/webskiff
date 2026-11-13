@@ -48,6 +48,8 @@ actions! {
     Bottom => "bottom", "Go to the bottom";
     Back => "back", "History back";
     Forward => "forward", "History forward";
+    JumpBack => "jump_back", "Jump back to the previous page or tab";
+    JumpForward => "jump_forward", "Jump forward again";
     Reload => "reload", "Reload the page";
     Stop => "stop", "Stop loading";
     UrlUp => "url_up", "Go up one level in the address";
@@ -352,7 +354,10 @@ impl Config {
             .map_or_else(|| "unbound".into(), |keys| keys.join("/"))
     }
 
-    pub fn help_lines(&self) -> Vec<String> {
+    /// Without keyboard enhancement the terminal sends Ctrl-I as Tab, so a Ctrl-I key is not shown.
+    pub fn help_lines(&self, enhanced: bool) -> Vec<String> {
+        let ctrl_i = Stroke(KeyCode::Char('i'), KeyModifiers::CONTROL);
+        let works = |label: &&String| enhanced || Stroke::parse(label) != Ok(ctrl_i);
         let mut lines = vec![
             "Webskiff keyboard help - configured bindings".into(),
             "Config: ~/.config/webskiff/config.toml (missing entries use repo defaults)".into(),
@@ -370,7 +375,15 @@ impl Config {
             lines.push(format!(" {} MODE", name.to_ascii_uppercase()));
             let mode = &self.modes[scope as usize];
             for &(_, action, description) in ACTIONS {
-                if let Some(keys) = mode.labels.get(&action) {
+                let keys: Vec<&String> = mode
+                    .labels
+                    .get(&action)
+                    .into_iter()
+                    .flatten()
+                    .filter(works)
+                    .collect();
+                if !keys.is_empty() {
+                    let keys: Vec<&str> = keys.into_iter().map(String::as_str).collect();
                     lines.push(format!("{}: {description}", keys.join(", ")));
                 }
             }
@@ -545,11 +558,24 @@ mod tests {
     fn default_browse_keys_jump_and_keep_tab_for_focus() {
         let config = Config::parse("").unwrap();
         for (event, expected) in [
-            (KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL), Action::JumpBack),
-            (KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL), Action::JumpForward),
-            (KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), Action::FocusNext),
+            (
+                KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+                Action::JumpBack,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL),
+                Action::JumpForward,
+            ),
+            (
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+                Action::FocusNext,
+            ),
         ] {
-            assert_eq!(config.action(Scope::Browse, event), Some(expected), "{event:?}");
+            assert_eq!(
+                config.action(Scope::Browse, event),
+                Some(expected),
+                "{event:?}"
+            );
         }
     }
 

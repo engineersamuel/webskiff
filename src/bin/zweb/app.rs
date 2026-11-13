@@ -25,6 +25,7 @@ use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::edit::{self, Edited};
 use crate::history::{self, Completion, History, Saver};
 use crate::input::{self, Edit, TextInput};
+use crate::jumps::{Jump, Jumps};
 use crate::keys;
 use crate::render::{Hop, Layout, Renderer};
 
@@ -479,7 +480,7 @@ pub struct Options {
     pub scale: Option<u32>,
     /// Images as flat placeholders of the same size (key I toggles).
     pub placeholders: bool,
-    /// The terminal takes keyboard enhancement flags (pushed at start).
+    /// The terminal reports keys with Kitty keyboard enhancement (Ctrl-I differs from Tab).
     pub enhanced: bool,
 }
 
@@ -552,6 +553,9 @@ pub struct App {
     saver: Saver,
     /// A `g e` edit runs, from its read to its write-back: no second one.
     editing: bool,
+    jumps: Jumps,
+    /// The tab a jump is restoring: its switch and next commit are not new jumps.
+    restoring: Option<u64>,
 }
 
 impl App {
@@ -561,7 +565,7 @@ impl App {
             bindings.labels(Scope::Browse, Action::Help),
             bindings.labels(Scope::Global, Action::Help)
         );
-        let help_lines = bindings.help_lines();
+        let help_lines = bindings.help_lines(opts.enhanced);
         App {
             tabs: Vec::new(),
             active: 0,
@@ -604,6 +608,8 @@ impl App {
             history: load_history(),
             saver: Saver::spawn(crate::data_dir().join("history.tsv")),
             editing: false,
+            jumps: Jumps::default(),
+            restoring: None,
         }
     }
 
@@ -796,12 +802,13 @@ impl App {
             self.prompt_done(false);
         }
         let index = index.min(self.tabs.len() - 1);
-        if let Some(old) = self.tabs.get(self.active) {
+        let old = self.tabs.get(self.active).map(|old| {
             old.view.set_focus(false);
             if self.mode == Mode::Visual {
                 old.view.evaluate(COLLAPSE_JS, |_| {});
             }
-        }
+            Jump { tab: old.id, url: old.url.clone() }
+        });
         self.active = index;
         self.find_generation += 1;
         self.mode = Mode::Browse;
@@ -817,6 +824,12 @@ impl App {
         self.renderer.clear_popup();
         self.renderer.forget();
         tab.view.request_frame();
+        if self.restoring.is_none() {
+            if let Some(old) = old.filter(|old| old.tab != tab.id) {
+                self.jumps.record(old);
+            }
+            self.record_jump(index);
+        }
         self.extents = None;
         self.query_extents();
         self.schedule_prepare();
@@ -830,6 +843,7 @@ impl App {
         let tab = self.tabs.remove(self.active);
         push_closed(&mut self.closed, tab.url.clone());
         tab.view.close();
+        self.jumps.remove_tab(tab.id);
         self.switch(self.active.min(self.tabs.len() - 1));
     }
 
@@ -976,6 +990,12 @@ impl App {
             self.saver.changed(Instant::now());
         }
         tab.url = url;
+        if self.restoring == Some(tab.id) {
+            self.restoring = None;
+        } else {
+            self.record_jump(i);
+        }
+        let tab = &self.tabs[i];
         self.prepared.committed(tab.id);
         if i == self.active {
             if self.mode == Mode::Hint {
@@ -1384,8 +1404,34 @@ impl App {
         true
     }
 
+    fn record_jump(&mut self, i: usize) {
+        let tab = &self.tabs[i];
+        if !tab.url.is_empty() {
+            self.jumps.record(Jump { tab: tab.id, url: tab.url.clone() });
+        }
+    }
+
+    /// Go to a jumplist entry: its tab, and its page if the tab has left it.
+    fn jump(&mut self, back: bool) {
+        let current = Jump { tab: self.tab().id, url: self.tab().url.clone() };
+        let target = if back { self.jumps.back(current) } else { self.jumps.forward() };
+        let Some((i, url)) = target.and_then(|t| Some((self.index_of(t.tab)?, t.url))) else {
+            self.message = if back { "no earlier jump" } else { "no later jump" }.into();
+            return;
+        };
+        self.restoring = Some(self.tabs[i].id);
+        self.switch(i);
+        if self.tabs[i].url == url {
+            self.restoring = None;
+        } else {
+            self.tabs[i].view.load_url(&url);
+        }
+    }
+
     fn navigation_command(&mut self, action: Action) -> bool {
         match action {
+            Action::JumpBack => self.jump(true),
+            Action::JumpForward => self.jump(false),
             Action::Back => self.view().go_back(),
             Action::Forward => self.view().go_forward(),
             Action::Reload => self.view().reload(),
