@@ -66,21 +66,23 @@ fn result(raw: &str, original: &str, single_line: bool) -> Edited {
 }
 
 /// Picks the field (the focused one, else the one left with Esc), keeps it
-/// for the write-back, and returns {text, input}, "password" or null.
+/// for the write-back, and returns {text, input}, "password", "readonly" or null.
 pub const READ_JS: &str = concat!(
     "(()=>{const ok=",
     editable!(),
     ";let e=document.activeElement;if(!(ok(e)&&e.isConnected))e=window.__zwebLastEdit;\
      if(!(ok(e)&&e.isConnected))return null;\
      if(e.tagName==='INPUT'&&e.type.toLowerCase()==='password')return 'password';\
+     if(e.readOnly||e.disabled)return 'readonly';\
      window.__zwebEditTarget=e;return {text:e.isContentEditable?e.innerText:e.value,input:e.tagName==='INPUT'}})()"
 );
 
-/// Replaces the kept field's text with `t` as typing would; false if it is gone.
+/// Replaces the kept field's text with `t` as typing would; false if it is
+/// gone or no longer writable.
 pub fn write_js(text: &str) -> String {
     let t = serde_json::to_string(text).unwrap_or_default();
     format!(
-        "(t=>{{const e=window.__zwebEditTarget;if(!e||!e.isConnected)return false;e.focus();\
+        "(t=>{{const e=window.__zwebEditTarget;if(!e||!e.isConnected||e.readOnly||e.disabled)return false;e.focus();\
          if(e.isContentEditable)document.execCommand('selectAll');else e.select();\
          if(!document.execCommand('insertText',false,t)){{\
          if(e.isContentEditable)e.innerText=t;else Object.getOwnPropertyDescriptor(\

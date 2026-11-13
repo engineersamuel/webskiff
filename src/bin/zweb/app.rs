@@ -750,7 +750,12 @@ impl App {
     fn edit_text(&mut self, tab: u64, json: Result<String, String>) {
         let v: serde_json::Value = json.ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
         let Some(original) = v["text"].as_str().map(String::from) else {
-            self.message = if v == "password" { "password field: not edited" } else { "no text field here" }.into();
+            self.message = match v.as_str() {
+                Some("password") => "password field: not edited",
+                Some("readonly") => "read-only field: not edited",
+                _ => "no text field here",
+            }
+            .into();
             return self.draw();
         };
         let path = match edit::temp_file(&original) {
@@ -786,7 +791,7 @@ impl App {
         if ok {
             let _ = std::fs::remove_file(&path);
         } else {
-            self.message = format!("field gone: text kept in {}", path.display());
+            self.message = format!("field gone or read-only: text kept in {}", path.display());
         }
         self.draw();
     }
