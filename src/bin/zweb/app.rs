@@ -301,6 +301,13 @@ impl Tab {
     fn url(&self) -> &str {
         &self.nav.url
     }
+
+    fn cancel_restore(&mut self) {
+        if self.nav.restoring() {
+            self.nav.clear_pending();
+            self.load_generation.set(self.load_generation.get() + 1);
+        }
+    }
 }
 
 struct Hint {
@@ -823,7 +830,12 @@ impl App {
             self.prompt_done(false);
         }
         let index = index.min(self.tabs.len() - 1);
-        let old = self.tabs.get(self.active).map(|old| {
+        let old = self.tabs.get_mut(self.active).map(|old| {
+            if record && index != self.active && old.nav.restoring() {
+                old.view.stop();
+                old.cancel_restore();
+                old.loading = false;
+            }
             old.view.set_focus(false);
             if self.mode == Mode::Visual {
                 old.view.evaluate(COLLAPSE_JS, |_| {});
@@ -1473,19 +1485,20 @@ impl App {
                 "already at the root of this address",
             ),
             Action::Back => {
-                self.tabs[self.active].nav.clear_pending();
+                self.tabs[self.active].cancel_restore();
                 self.view().go_back();
             }
             Action::Forward => {
-                self.tabs[self.active].nav.clear_pending();
+                self.tabs[self.active].cancel_restore();
                 self.view().go_forward();
             }
             Action::Reload => {
-                self.tabs[self.active].nav.clear_pending();
+                self.tabs[self.active].cancel_restore();
                 self.view().reload();
             }
             Action::Stop => {
-                self.tabs[self.active].nav.clear_pending();
+                self.tabs[self.active].cancel_restore();
+                self.tabs[self.active].loading = false;
                 self.view().stop();
             }
             _ => return false,
@@ -2319,6 +2332,7 @@ impl App {
                 if p.kind == PromptKind::OpenTab {
                     self.open_tab(Some(&url), None);
                 } else {
+                    self.tabs[self.active].cancel_restore();
                     self.load_here(url);
                 }
             }
@@ -2882,8 +2896,10 @@ mod jumps_tests {
         let mut app = restoring();
         app.load_event(1, app.tab().load_generation.get(), LoadEvent::Started, "b".into());
         let stale = committed(&app, 0, "b");
+        let generation = app.tab().load_generation.get();
         app.switch(1);
         assert_eq!(&*app.tabs[0].view.calls.borrow(), &["load b", "stop"]);
+        assert_eq!(app.tabs[0].load_generation.get(), generation + 1);
         assert!(!app.tabs[0].loading);
         assert!(!app.tabs[0].nav.restoring());
         assert_eq!(app.tabs[0].url(), "c");
@@ -2899,22 +2915,40 @@ mod jumps_tests {
         assert_eq!(app.jumps.back(current), None);
     }
 
+    #[test]
+    fn app_jumps_switch_only_cancels_when_user_leaves_restore() {
+        for (pending, record, index) in [(true, true, 0), (true, false, 1), (false, true, 1)] {
+            let mut app = if pending { restoring() } else { app_with_tabs(&["c", "x"]) };
+            let generation = app.tab().load_generation.get();
+            app.load_event(1, generation, LoadEvent::Started, "b".into());
+            let current = app.tab().nav.current();
+            let calls = app.tab().view.calls.borrow().clone();
+            app.switch_inner(index, record);
+            assert_eq!(app.tabs[0].nav.current(), current);
+            assert_eq!(app.tabs[0].load_generation.get(), generation);
+            assert!(app.tabs[0].loading);
+            assert_eq!(*app.tabs[0].view.calls.borrow(), calls);
+        }
+    }
+
     fn cancelled_restore_ignores_queued_commit(action: Option<Action>, expected: &str) {
         let mut app = restoring();
         app.load_event(1, app.tab().load_generation.get(), LoadEvent::Started, "b".into());
         let stale = committed(&app, 0, "b");
+        let generation = app.tab().load_generation.get();
         match action {
             Some(action) => assert!(app.navigation_command(action)),
             None => {
                 app.prompt = Some(Prompt {
                     kind: PromptKind::Open, label: "open: ".into(),
-                    input: TextInput::new("https://example.com/d".into()),
+                    input: TextInput::new("https://example.com/d"),
                     not_found: false, keep_open: false, hint: String::new(),
                 });
                 app.prompt_done(true);
             }
         }
         assert_eq!(app.tab().view.calls.borrow().last().unwrap(), expected);
+        assert_eq!(app.tab().load_generation.get(), generation + 1);
         assert!(!app.tab().nav.restoring());
         let url = if action.is_none() { "https://example.com/d" } else { "c" };
         assert_eq!(app.tab().url(), url);

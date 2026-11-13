@@ -5,8 +5,11 @@
 ### Bug Fixes
 
 - Preserve forward jumplist entries when a background tab finishes navigating.
-- Preserve jumplist history through rapid jumps and redirected restores; tab
-  switches record the pending destination while its restore finishes in the background.
+- Preserve jumplist history through rapid jumps and redirected restores.
+- Cancel pending jumplist restores when switching away from a tab, recording its
+  committed page instead of the unfinished destination.
+- Ignore queued commits from restores cancelled by Back, Forward, Reload, Stop,
+  or opening a URL; Stop also clears the loading indicator.
 
 ## [0.6.0](https://github.com/engineersamuel/webskiff/compare/v0.5.0...v0.6.0) (2026-11-14)
 
