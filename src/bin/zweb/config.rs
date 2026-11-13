@@ -636,7 +636,10 @@ mod tests {
             Binding::Prefix(prefix) => prefix,
             _ => panic!("missing g prefix"),
         };
-        for (key, want) in [("u", Action::UrlUp), ("U", Action::UrlRoot)] {
+        for (key, want) in [
+            ("u", Action::UrlUp),
+            ("U", Action::UrlRoot),
+        ] {
             let Stroke(code, modifiers) = Stroke::parse(key).unwrap();
             let got = config.resolve(Scope::Browse, KeyEvent::new(code, modifiers), Some(prefix));
             assert!(
