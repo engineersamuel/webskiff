@@ -1378,7 +1378,14 @@ impl App {
             return self.draw();
         }
         match self.bindings.resolve(Scope::Browse, k, prefix) {
-            Binding::Action(action) => self.browser_command(action),
+            Binding::Action(action) => {
+                // Kitty: the action's frame places the rows under the popup.
+                if prefix.is_some() && self.popup_rows.get() > 0 && self.renderer.gfx != crate::render::Gfx::Blocks {
+                    self.popup_rows.set(0);
+                    self.renderer.uncover_by_frame();
+                }
+                self.browser_command(action)
+            }
             Binding::Prefix(prefix) => {
                 self.pending_key = Some(prefix);
                 self.draw();
@@ -2537,7 +2544,7 @@ impl App {
 
     /// The next keys of a pending prefix, in a box above the status line.
     /// Page tiles are images drawn over text: the renderer leaves those rows
-    /// to text while it is open, and draws them again from a new frame.
+    /// to text while it is open, and places them again when it closes.
     fn draw_prefix_popup(&self, out: &mut Vec<u8>) {
         let l = self.layout();
         let browsing = self.mode == Mode::Browse && self.prompt.is_none() && !self.help;
@@ -2550,7 +2557,9 @@ impl App {
         if n != self.popup_rows.get() {
             self.popup_rows.set(n);
             self.renderer.cover(n);
-            if n == 0 {
+            // Kitty places the covered tiles again from its copies; blocks
+            // have none, so they need a new frame.
+            if n == 0 && self.renderer.gfx == crate::render::Gfx::Blocks {
                 if let Some(t) = self.tabs.get(self.active) {
                     t.view.request_frame();
                 }
