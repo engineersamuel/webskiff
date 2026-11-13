@@ -377,6 +377,20 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             Check::Js("window.vscroll", "\"[false,\\\"\\\"]\""),
         ),
         (
+            "app: a side scroll ends VISUAL and removes its selection",
+            Box::new(|_, v| {
+                let wheel = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollRight,
+                    column: 10,
+                    row: 5,
+                    modifiers: KeyModifiers::NONE,
+                });
+                let k = |c| Event::Key(key(KeyCode::Char(c), KeyModifiers::NONE));
+                app_events(v, "vside", &[k('v'), k('l'), wheel]);
+            }),
+            Check::Js("window.vside", "\"[false,\\\"\\\"]\""),
+        ),
+        (
             "app: v on a page with no text returns to Browse",
             Box::new(|_, v| {
                 let page = APP.with(|a| a.borrow().as_ref().expect("app").view());
