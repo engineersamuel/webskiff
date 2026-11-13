@@ -98,9 +98,10 @@ function hintSpot(f, vh, bgOf, pageBg) {
 // label, title or image's alt; spaces collapsed, at most 64 characters.
 function textOf(e) {
   const field = e.tagName === 'INPUT' || e.tagName === 'TEXTAREA' || e.tagName === 'SELECT';
-  const t = (field ? e.value || e.placeholder : e.textContent.slice(0, 1000)) ||
-    e.getAttribute('aria-label') || e.title || e.querySelector('img[alt]')?.alt || '';
-  return t.replace(/\s+/g, ' ').trim().slice(0, 64);
+  const clean = t => (t || '').replace(/\s+/g, ' ').trim();
+  const t = (field ? clean(e.value) || clean(e.placeholder) : clean(e.textContent.slice(0, 1000))) ||
+    clean(e.getAttribute('aria-label')) || clean(e.title) || clean(e.querySelector('img[alt]')?.alt);
+  return t.slice(0, 64);
 }
 
 function scan(keys) {
