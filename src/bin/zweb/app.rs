@@ -35,6 +35,8 @@ const EDITABLE_JS: &str = concat!(editable!(), "(document.activeElement)");
 pub const VISUAL_START_JS: &str = concat!(include_str!("caret.js"), ";__zwebCaret.start()");
 /// The selection's text; the selection collapses.
 pub const YANK_JS: &str = "__zwebCaret.text()";
+/// Removes the Visual selection, so the next `v` does not start there.
+const COLLAPSE_JS: &str = "window.__zwebCaret?.collapse()";
 /// Largest OSC 52 payload a yank writes, in base64 bytes.
 const YANK_MAX: usize = 100_000;
 const HOME: &str = "https://duckduckgo.com/";
@@ -636,6 +638,9 @@ impl App {
         let index = index.min(self.tabs.len() - 1);
         if let Some(old) = self.tabs.get(self.active) {
             old.view.set_focus(false);
+            if self.mode == Mode::Visual {
+                old.view.evaluate(COLLAPSE_JS, |_| {});
+            }
         }
         self.active = index;
         self.find_generation += 1;
@@ -781,6 +786,9 @@ impl App {
         if i == self.active {
             if self.mode == Mode::Hint {
                 self.renderer.hop(None);
+            }
+            if self.mode == Mode::Visual {
+                tab.view.evaluate(COLLAPSE_JS, |_| {});
             }
             if matches!(self.mode, Mode::Hint | Mode::Visual) {
                 self.mode = Mode::Browse;
@@ -1604,7 +1612,7 @@ impl App {
     fn leave_hint_or_visual(&mut self) {
         match self.mode {
             Mode::Hint => self.clear_hints(),
-            Mode::Visual => {}
+            Mode::Visual => self.view().evaluate(COLLAPSE_JS, |_| {}),
             _ => return,
         }
         self.mode = Mode::Browse;
@@ -1639,9 +1647,7 @@ impl App {
 
     fn visual_key(&mut self, k: KeyEvent) {
         match self.bindings.action(Scope::Visual, k) {
-            Some(Action::Cancel) => self
-                .view()
-                .evaluate("window.__zwebCaret?.collapse()", |_| {}),
+            Some(Action::Cancel) => self.view().evaluate(COLLAPSE_JS, |_| {}),
             Some(Action::Yank) => {
                 let tab = self.tab().id;
                 self.view().evaluate(YANK_JS, move |r| {
