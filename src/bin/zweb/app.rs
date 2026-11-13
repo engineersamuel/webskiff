@@ -991,7 +991,7 @@ impl App {
             }
             return;
         }
-        if !tab.nav.commit(url, &mut self.jumps) {
+        if !tab.nav.commit(url, i == self.active, &mut self.jumps) {
             return;
         }
         tab.committed = true;

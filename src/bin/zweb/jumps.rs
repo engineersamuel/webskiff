@@ -67,7 +67,7 @@ impl TabNav {
         }
     }
 
-    pub fn commit(&mut self, url: String, jumps: &mut Jumps) -> bool {
+    pub fn commit(&mut self, url: String, active: bool, jumps: &mut Jumps) -> bool {
         match self.pending.take() {
             Some(PendingJump::Superseded(stale)) if stale == url => return false,
             Some(PendingJump::Restoring(want)) if want == url => {
@@ -75,7 +75,7 @@ impl TabNav {
             }
             _ => {
                 self.url = url;
-                if !self.url.is_empty() {
+                if active && !self.url.is_empty() {
                     jumps.record(Jump {
                         tab: self.id,
                         url: self.url.clone(),
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(tab.jump_to(&target_a.url), super::NavOp::Load("a".into()));
         let target_b = jumps.forward().unwrap();
         assert_eq!(tab.jump_to(&target_b.url), super::NavOp::Stop);
-        assert!(!tab.commit("a".into(), &mut jumps));
+        assert!(!tab.commit("a".into(), true, &mut jumps));
         assert_eq!(tab.url, "b");
         assert_eq!(jumps.back(tab.current()), Some(jump(1, "a")));
     }
@@ -298,11 +298,11 @@ mod tests {
         let mut tab = super::TabNav::new(1, "b".into());
         let target_a = jumps.back(tab.current()).unwrap();
         assert_eq!(tab.jump_to(&target_a.url), super::NavOp::Load("a".into()));
-        assert!(tab.commit("a".into(), &mut jumps));
+        assert!(tab.commit("a".into(), true, &mut jumps));
         assert_eq!(tab.jump_to(&target_a.url), super::NavOp::None);
         let target_b = jumps.forward().unwrap();
         assert_eq!(tab.jump_to(&target_b.url), super::NavOp::Load("b".into()));
-        assert!(tab.commit("b".into(), &mut jumps));
+        assert!(tab.commit("b".into(), true, &mut jumps));
 
         // User-initiated navigation while restore was in flight records the new jump.
         let target_a = jumps.back(tab.current()).unwrap();
@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(tab.current(), jump(1, "b"));
         tab.open("c".into());
         assert_eq!(tab.url, "c");
-        assert!(tab.commit("c".into(), &mut jumps));
+        assert!(tab.commit("c".into(), true, &mut jumps));
         assert_eq!(jumps.forward(), None);
         assert_eq!(jumps.back(tab.current()), Some(jump(1, "a")));
     }
@@ -329,7 +329,7 @@ mod tests {
         // Failed loads and Stop both cancel the per-tab restoration.
         tab.clear_pending();
         assert_eq!(tab.current(), jump(1, "b"));
-        assert!(tab.commit("a".into(), &mut jumps));
+        assert!(tab.commit("a".into(), true, &mut jumps));
         assert_eq!(jumps.forward(), None);
         assert_eq!(jumps.back(tab.current()), None);
     }
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(jumps.back(background.current()), Some(jump(1, "a")));
 
         // Tab 1 is active when the slow second tab finally commits.
-        assert!(background.commit("redirected-b".into(), &mut jumps));
+        assert!(background.commit("redirected-b".into(), false, &mut jumps));
         assert_eq!(background.current(), jump(2, "redirected-b"));
         assert_eq!(jumps.forward(), Some(jump(2, "b")));
         assert_eq!(jumps.back(jump(2, "b")), Some(jump(1, "a")));
