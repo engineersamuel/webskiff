@@ -875,6 +875,34 @@ mod tests {
     }
 
     #[test]
+    fn lists_default_g_continuations_with_descriptions() {
+        let config = Config::parse("").unwrap();
+        let g = Stroke::parse("g").unwrap();
+        assert_eq!(
+            config.continuations(Scope::Browse, g),
+            [
+                ("g".to_string(), "Go to the top"),
+                ("i".to_string(), "Focus the first text field")
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_leader_continuations_with_descriptions() {
+        let config =
+            Config::parse("[keys.browse]\nreload = ['Leader r']\nzoom_in = ['Leader z', '+']")
+                .unwrap();
+        let leader = Stroke::parse(",").unwrap();
+        assert_eq!(
+            config.continuations(Scope::Browse, leader),
+            [
+                ("r".to_string(), "Reload the page"),
+                ("z".to_string(), "Zoom in")
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_invalid_and_conflicting_leader_configs() {
         let conflict =
             Config::parse("leader = 'Space'\n[keys.browse]\nreload = ['Leader x']").unwrap_err();

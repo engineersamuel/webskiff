@@ -3541,6 +3541,15 @@ mod tests {
         assert!(status.contains("too large"), "{status}");
     }
 
+    #[test]
+    fn prefix_popup_lists_each_key_and_description_clipped() {
+        use super::prefix_popup_lines;
+        let entries = [("g".to_string(), "Go to the top"), ("i".to_string(), "Focus the first text field")];
+        assert_eq!(prefix_popup_lines(&entries, 80), ["g  Go to the top", "i  Focus the first text field"]);
+        assert_eq!(prefix_popup_lines(&entries, 10), ["g  Go to t", "i  Focus t"]);
+        assert!(prefix_popup_lines(&[], 80).is_empty());
+    }
+
     fn two_pages() -> crate::history::History {
         let mut history = crate::history::History::default();
         history.visit("https://second.example/", 1_000);

@@ -302,6 +302,14 @@ try:
         print("CONFIGURED KEYBOARD CHECKS PASSED")
         raise SystemExit(0)
     if args.check or args.check_only:
+        # Esc without a prefix reaches the page; Esc after a prefix only cancels it.
+        press(b"\x1b", expected="escape 1")
+        raw = press(b"g")
+        for description in ("Go to the top", "Focus the first text field"):
+            assert description.encode() in raw, f"prefix popup lacks {description!r}: {raw[-3000:]!r}"
+        raw = press(b"\x1b") + press(b"i", expected="INSERT")
+        assert b"escape 2" not in raw, "Esc after a prefix was sent to the page"
+        press(b"\x1b", expected="BROWSE")
         press(b"/")
         press(b"alpha", expected="m first:0:alpha")
         press(b"\r", expected="m first:0:alpha")
@@ -456,6 +464,9 @@ try:
     for _ in range(6):
         press(b"?", "help open")
         press(b"\x1b", "help close")
+    for _ in range(12):
+        press(b"g", "prefix g")
+        press(b"\x1b")
     press(b"g")
     press(b"i")
     for character in "hello world":

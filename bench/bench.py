@@ -27,21 +27,23 @@ def step(keys, gap=0.0):
     done = (imgs[-1][0] - t_last) if imgs else float("nan")
     total = sum(len(d) for _, d in log)
     n = sum(d.count(b"a=T") for _, d in log) + sum(d.count("▀".encode()) > 0 for _, d in log)
-    return first * 1000, done * 1000, total // 1024, sum(d.count(b"a=T") for _, d in log), sum(d.count(b"a=p") for _, d in log)
+    return first * 1000, done * 1000, total, sum(d.count(b"a=T") for _, d in log), sum(d.count(b"a=p") for _, d in log)
 # Answer the start-up query as Kitty does (graphics OK for direct, no shm), then load.
 pump(0.5); os.write(fd, b"\x1b_Gi=31;OK\x1b\\\x1b[?62;c")
 end = time.time() + 10
 while time.time() < end and not any(b"a=T" in d for _, d in log): pump(0.1)
 log.clear(); pump(6, quiet=1.0)
-rows = {"single j": [], "held j x15 (33ms repeat)": [], "single space (page)": []}
+rows = {"single j": [], "single k": [], "held j x15 (33ms repeat)": [], "single space (page)": []}
 for _ in range(5):
     rows["single j"].append(step([b"j"]))
+for _ in range(5):
+    rows["single k"].append(step([b"k"]))
 for _ in range(3):
     rows["held j x15 (33ms repeat)"].append(step([b"j"] * 15, gap=0.033))
 for _ in range(3):
     rows["single space (page)"].append(step([b" "]))
 os.write(fd, b"\x11"); pump(2)
-print(f"{'action':28} {'key->first img':>15} {'last key->last img':>19} {'KB out':>7} {'sent':>5} {'moved':>6}")
+print(f"{'action':28} {'key->first img':>15} {'last key->last img':>19} {'B out':>8} {'sent':>5} {'moved':>6}")
 for k, v in rows.items():
     med = lambda i: st.median(x[i] for x in v)
-    print(f"{k:28} {med(0):12.0f} ms {med(1):16.0f} ms {med(2):7.0f} {med(3):5.0f} {med(4):6.0f}")
+    print(f"{k:28} {med(0):12.0f} ms {med(1):16.0f} ms {med(2):8.0f} {med(3):5.0f} {med(4):6.0f}")
