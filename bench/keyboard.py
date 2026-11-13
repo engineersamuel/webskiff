@@ -142,6 +142,88 @@ def percentile(values, fraction):
     return values[min(int(len(values) * fraction), len(values) - 1)] if values else None
 
 
+# A complete Kitty graphics command: its control keys, an optional payload.
+KITTY = re.compile(rb"\x1b_G([^;\x1b]*)(?:;[^\x1b]*)?\x1b\\")
+# A tab picker row: "<number>: <title or URL>" written at column 3.
+PICKER_ROW = re.compile(rb"\x1b\[\d+;3H(\d+): ([^\x1b\r\n]*)")
+# The active tab's label in the tab bar (reverse video).
+ACTIVE_TAB = re.compile(rb"\x1b\[7m (\d+)\*? ")
+
+
+def page_image(raw):
+    return any({b"a=T", b"a=p"} & set(m.group(1).split(b",")) for m in KITTY.finditer(raw))
+
+
+def picker_rows(raw):
+    return [(int(number), name.decode()) for number, name in PICKER_ROW.findall(raw)]
+
+
+def active_tab(raw):
+    tabs = ACTIVE_TAB.findall(raw)
+    assert tabs, f"no active tab in the browser chrome: {raw[-2000:]!r}"
+    return int(tabs[-1])
+
+
+def drain():
+    deadline = time.monotonic() + 2
+    while pump(0.03) and time.monotonic() < deadline:
+        pass
+
+
+def until(keys, found, label=None, seconds=1.0):
+    """Writes keys after a drain; returns all output up to `found` and 50 ms more.
+
+    The sample is from the key write to the read that completes `found`."""
+    drain()
+    buffer = bytearray()
+    start = time.monotonic()
+    os.write(fd, keys)
+    while time.monotonic() < start + seconds:
+        if select.select([fd], [], [], 0.002)[0]:
+            buffer.extend(os.read(fd, 1 << 20))
+            if found(bytes(buffer)):
+                if label:
+                    samples.setdefault(label, []).append({"ms": (time.monotonic() - start) * 1000})
+                buffer.extend(b"".join(data for _, data in pump(0.05)))
+                return bytes(buffer)
+    raise AssertionError(f"{keys!r}: expected output not seen in {seconds} s: {bytes(buffer[-3000:])!r}")
+
+
+def wait_for(marker, seconds=10):
+    output = bytearray()
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        output.extend(b"".join(data for _, data in pump(0.1)))
+        if marker in output:
+            return bytes(output)
+    raise AssertionError(f"{marker!r} not seen: {bytes(output[-3000:])!r}")
+
+
+def open_titled_tab(title):
+    press(b"t", expected="NEW TAB")
+    os.write(fd, (fixture + "?title=" + title).encode() + b"\r")
+    return wait_for(f" {title} ".encode())
+
+
+def pick_tab(before, query, target, cancel=False, timed=False):
+    """Opens the tab picker in tab `before`, types `query`, which must list only
+    tab `target`, and closes with Esc or Enter. Returns the active tab after."""
+    raw = until(b"T", lambda raw: bool(picker_rows(raw)), timed and "picker open")
+    assert b" TABS " in raw, f"picker did not open: {raw[-2000:]!r}"
+    assert active_tab(raw) == before, f"active tab {active_tab(raw)} before the picker, not {before}"
+    for index, character in enumerate(query):
+        raw = until(character.encode(), lambda raw: bool(picker_rows(raw)), timed and index == 0 and "picker filter")
+    if query:
+        rows = picker_rows(raw)
+        assert [number for number, _ in rows] == [target], f"{query!r} lists {rows}, not only tab {target}"
+    key, label = (b"\x1b", "picker esc close") if cancel else (b"\r", "picker enter close")
+    raw = until(key, page_image, timed and label)
+    assert b" BROWSE " in raw and b" TABS " not in raw.split(b" BROWSE ")[-1], f"picker did not close: {raw[-2000:]!r}"
+    after = active_tab(raw)
+    assert after == (before if cancel else target), f"active tab {after}, before {before}, target {target}"
+    return after
+
+
 def wait_for_fixture(text=b"keyboard fixture", keys=None):
     output = bytearray()
     deadline = time.monotonic() + 20
@@ -373,6 +455,12 @@ try:
         press(b"\x1b[9;6u", expected="\x1b[7m 1")
         press(b"\x1b[9;5u", expected="\x1b[7m 2")
         press(b"\x17", expected="keyboard fixture")
+        open_titled_tab("Zebra")
+        assert active_tab(open_titled_tab("Quokka")) == 3
+        active = pick_tab(3, "zbr", 2)
+        pick_tab(active, "", active, cancel=True)
+        press(b"x")
+        press(b"x", expected="\x1b[7m 1")
         print("KEYBOARD CHECKS PASSED")
         if args.check_only:
             # g e on a password field: refused, the editor does not run.
@@ -492,6 +580,13 @@ try:
         press(b"\r", "find enter")
         press(b"n", "find next")
         press(b"N", "find previous")
+    press(b"\x1b")
+    open_titled_tab("Zebra")
+    active = active_tab(open_titled_tab("Quokka"))
+    for _ in range(8):
+        query, target = ("zbr", 2) if active == 3 else ("qkk", 3)
+        active = pick_tab(active, query, target, timed=True)
+        pick_tab(active, "", active, cancel=True, timed=True)
     results = {}
     for label, rows in samples.items():
         results[label] = {

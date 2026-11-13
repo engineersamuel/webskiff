@@ -3745,4 +3745,16 @@ mod tests {
             "a `g` typed before the page focused a field stays pending"
         );
     }
+
+    #[test]
+    fn tab_filter_is_a_case_insensitive_subsequence_of_title_and_url() {
+        use super::tab_matches;
+        // The URL has no "w" and no "k": only the title can match "wkp".
+        let url = "https://example.org/";
+        assert!(tab_matches("wkp", "Wikipedia", url));
+        assert!(tab_matches("WkP", "Wikipedia", url));
+        assert!(!tab_matches("zzz", "Wikipedia", url));
+        assert!(tab_matches("exorg", "", url));
+        assert!(tab_matches("", "Wikipedia", url));
+    }
 }
