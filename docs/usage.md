@@ -23,6 +23,10 @@ after the cursor. Tab replaces the text with the best match; Tab again shows the
 next match, and Shift-Tab the previous one. Matches contain every typed word in
 the address or title, ranked by how often and how recently you visited them.
 
+`T` picks a tab by name. It lists the open tabs; typing filters them by the
+typed letters in order, ignoring case, in the title or address (`wkp` finds
+Wikipedia). Enter switches to the first match; Escape keeps the current tab.
+
 Arrow keys, Page Up/Down, Home/End, Alt-Left/Right, and F5 provide standard
 scrolling, history, and reload alongside the Vim keys.
 
