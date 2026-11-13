@@ -546,4 +546,24 @@ mod tests {
             Binding::Action(Action::FocusInput)
         ));
     }
+
+    #[test]
+    fn g_e_edits_the_text_field_externally() {
+        let config = Config::parse("").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("missing g prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('e')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::EditExternal)
+        ));
+        assert!(config
+            .help_lines()
+            .contains(&"g e: Edit the text field in $EDITOR".to_string()));
+    }
 }
