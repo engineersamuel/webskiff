@@ -303,6 +303,90 @@ fn filter_hints(hints: &[Hint], text: &str, typed: &str) -> Vec<usize> {
         .collect()
 }
 
+/// A filtered-hints key (`g f`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FilterKey {
+    Char(char),
+    Back,
+    Accept,
+}
+
+/// What a filtered-hints key does: follow a hint, or show these.
+#[derive(Debug, PartialEq)]
+enum FilterStep {
+    Pick(usize),
+    Show(Vec<usize>),
+}
+
+/// Filtered hints' input: digits pick codes, other characters filter by
+/// text. Keys typed before the targets arrive wait in `queue`.
+#[derive(Default)]
+struct HintFilter {
+    text: String,
+    code: String,
+    queue: Vec<FilterKey>,
+}
+
+impl HintFilter {
+    fn left(&self, hints: &[Hint]) -> Vec<usize> {
+        filter_hints(hints, &self.text, &self.code)
+    }
+
+    /// Applies `key`; with no targets yet, queues it.
+    fn key(&mut self, hints: &[Hint], key: FilterKey) -> Option<FilterStep> {
+        if hints.is_empty() {
+            self.queue.push(key);
+            return None;
+        }
+        match key {
+            FilterKey::Accept => return self.left(hints).first().map(|&i| FilterStep::Pick(i)),
+            FilterKey::Back => {
+                if self.code.pop().is_none() {
+                    self.text.pop();
+                }
+            }
+            FilterKey::Char(c) => {
+                let field = if c.is_ascii_digit() {
+                    &mut self.code
+                } else {
+                    &mut self.text
+                };
+                field.push(c);
+                if self.left(hints).is_empty() {
+                    let field = if c.is_ascii_digit() {
+                        &mut self.code
+                    } else {
+                        &mut self.text
+                    };
+                    field.pop();
+                }
+            }
+        }
+        let left = self.left(hints);
+        Some(if left.len() == 1 {
+            FilterStep::Pick(left[0])
+        } else {
+            FilterStep::Show(left)
+        })
+    }
+
+    /// The targets arrived: applies the queued keys in order, up to a pick.
+    fn ready(&mut self, hints: &[Hint]) -> Option<FilterStep> {
+        let queue = std::mem::take(&mut self.queue);
+        if hints.is_empty() {
+            return None;
+        }
+        let mut step = None;
+        for key in queue {
+            step = self.key(hints, key);
+            if matches!(step, Some(FilterStep::Pick(_))) {
+                break;
+            }
+        }
+        step
+    }
+}
+
 /// Hints read ahead for a tab: its id, hints.js's id, the overlay, the hints.
 type Prepared = (u64, String, Hop, Vec<Hint>);
 
@@ -389,9 +473,9 @@ pub struct App {
     /// Hints read ahead, for each of HINT_KEYS.
     prepared: [Option<Prepared>; 2],
     hint_typed: String,
-    /// Filtered hints (`g f`): digits are codes, other characters `hint_text`.
+    /// Filtered hints (`g f`), and their input.
     hint_filter: bool,
-    hint_text: String,
+    filter: HintFilter,
     /// Filtered hints: the overlay with every code, shown in part.
     hint_hop: Option<Hop>,
     /// The dim layer's colour of the hints shown.
@@ -451,7 +535,7 @@ impl App {
             prepared: [None, None],
             hint_typed: String::new(),
             hint_filter: false,
-            hint_text: String::new(),
+            filter: HintFilter::default(),
             hint_hop: None,
             hint_dim: None,
             hint_new_tab: false,
@@ -966,6 +1050,11 @@ impl App {
                 self.hint_hop = Some(hop.clone());
             }
             self.renderer.hop(Some(hop));
+        }
+        if self.hint_filter {
+            if let Some(step) = self.filter.ready(&self.hints) {
+                return self.filter_step(step);
+            }
         }
         self.draw();
     }
@@ -1612,7 +1701,7 @@ impl App {
         self.hint_dim = None;
         self.hints.clear();
         self.hint_typed.clear();
-        self.hint_text.clear();
+        self.filter = HintFilter::default();
         self.hint_hop = None;
         if let Some(t) = self.tabs.get(self.active) {
             t.view
@@ -1760,44 +1849,30 @@ impl App {
     /// Enter picks the first left. Labels never change, and no new image is
     /// made: the overlay is placed again with only the codes left.
     fn filter_key(&mut self, k: KeyEvent) {
-        match self.bindings.action(Scope::Hint, k) {
+        let key = match self.bindings.action(Scope::Hint, k) {
             Some(Action::Cancel) => {
                 self.mode = Mode::Browse;
                 self.clear_hints();
                 return self.draw();
             }
-            _ if self.hints.is_empty() => return,
-            Some(Action::Backspace) => {
-                if self.hint_typed.pop().is_none() {
-                    self.hint_text.pop();
-                }
-            }
-            Some(Action::Accept) => return self.pick_hint(self.filtered()[0]),
-            None => {
-                if let Some(c) = input::character(k) {
-                    let digit = c.is_ascii_digit();
-                    let field = if digit {
-                        &mut self.hint_typed
-                    } else {
-                        &mut self.hint_text
-                    };
-                    field.push(c);
-                    if self.filtered().is_empty() {
-                        let field = if digit {
-                            &mut self.hint_typed
-                        } else {
-                            &mut self.hint_text
-                        };
-                        field.pop();
-                    }
-                }
-            }
-            _ => {}
+            Some(Action::Backspace) => FilterKey::Back,
+            Some(Action::Accept) => FilterKey::Accept,
+            None => match input::character(k) {
+                Some(c) => FilterKey::Char(c),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Some(step) = self.filter.key(&self.hints, key) {
+            self.filter_step(step);
         }
-        let left = self.filtered();
-        if left.len() == 1 {
-            return self.pick_hint(left[0]);
-        }
+    }
+
+    fn filter_step(&mut self, step: FilterStep) {
+        let left = match step {
+            FilterStep::Pick(i) => return self.pick_hint(i),
+            FilterStep::Show(left) => left,
+        };
         if let Some(hop) = &self.hint_hop {
             let cells = left
                 .iter()
@@ -1815,10 +1890,6 @@ impl App {
             self.view().evaluate(&js, |_| {});
         }
         self.draw();
-    }
-
-    fn filtered(&self) -> Vec<usize> {
-        filter_hints(&self.hints, &self.hint_text, &self.hint_typed)
     }
 
     /// Follows hint `i`: a click at it, or its link in a new tab.
@@ -2204,8 +2275,8 @@ impl App {
             None if self.mode == Mode::Hint && self.hint_filter => (
                 format!(
                     " filter: {}  {} matches",
-                    self.hint_text,
-                    self.filtered().len()
+                    self.filter.text,
+                    self.filter.left(&self.hints).len()
                 ),
                 String::new(),
             ),
