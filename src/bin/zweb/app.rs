@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,6 +16,7 @@ use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse, WheelPhase
 use zebkit::page::{Dialog, DialogPolicy, DialogType};
 use zebkit::{LoadEvent, View};
 
+use crate::edit::{self, Edited};
 use crate::keys;
 use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::history::{self, Completion, History, Saver};
@@ -23,8 +25,7 @@ use crate::render::{Hop, Layout, Renderer};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
-const EDITABLE_JS: &str = "(e=>!!e&&(e.isContentEditable||e.tagName==='TEXTAREA'||(e.tagName==='INPUT'&&\
-    !/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(e.type))))(document.activeElement)";
+const EDITABLE_JS: &str = concat!(editable!(), "(document.activeElement)");
 const HOME: &str = "https://duckduckgo.com/";
 /// Cell rows per scroll step (j, k, the wheel).
 const STEP_ROWS: f32 = 3.0;
@@ -50,6 +51,11 @@ pub enum Msg {
     Prepared { tab: u64, json: String },
     Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
     Focused { ok: bool },
+    /// The field's text for the external editor (edit.rs `READ_JS`).
+    EditText { tab: u64, json: Result<String, String> },
+    EditDone { tab: u64, path: PathBuf, edited: Edited },
+    /// The edited text went back into the field, or the field was gone.
+    EditWritten { path: PathBuf, ok: bool },
     Extents { tab: u64, json: Option<String> },
     /// Read the page for hints ahead, if nothing happened since `gen`.
     Prepare { gen: u64 },
@@ -231,6 +237,8 @@ pub struct Options {
     pub scale: Option<u32>,
     /// Images as flat placeholders of the same size (key I toggles).
     pub placeholders: bool,
+    /// The terminal takes keyboard enhancement flags (pushed at start).
+    pub enhanced: bool,
 }
 
 /// Images keep their boxes (the layout does not move) and still load (so
@@ -509,6 +517,9 @@ impl App {
             Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
             Msg::Focused { ok } => self.focused(ok),
+            Msg::EditText { tab, json } => self.edit_text(tab, json),
+            Msg::EditDone { tab, path, edited } => self.edit_done(tab, path, edited),
+            Msg::EditWritten { path, ok } => self.edit_written(path, ok),
             Msg::Tick => self.tick(),
         }
     }
@@ -736,6 +747,50 @@ impl App {
         self.draw();
     }
 
+    fn edit_text(&mut self, tab: u64, json: Result<String, String>) {
+        let v: serde_json::Value = json.ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+        let Some(original) = v["text"].as_str().map(String::from) else {
+            self.message = if v == "password" { "password field: not edited" } else { "no text field here" }.into();
+            return self.draw();
+        };
+        let path = match edit::temp_file(&original) {
+            Ok(path) => path,
+            Err(error) => {
+                self.message = format!("cannot write edit file: {error}");
+                return self.draw();
+            }
+        };
+        let (single_line, enhanced) = (v["input"].as_bool().unwrap_or(false), self.opts.enhanced);
+        std::thread::spawn(move || {
+            let edited = edit::run(&path, &original, single_line, enhanced);
+            zebkit::post(move || send(Msg::EditDone { tab, path, edited }));
+        });
+    }
+
+    fn edit_done(&mut self, tab: u64, path: PathBuf, edited: Edited) {
+        edit::INPUT_PAUSED.store(false, std::sync::atomic::Ordering::SeqCst);
+        let text = match edited {
+            Edited::Text(text) => text,
+            other => {
+                let _ = std::fs::remove_file(&path);
+                self.message = if matches!(other, Edited::Failed) { "editor failed: no change" } else { "no change" }.into();
+                return self.relayout();
+            }
+        };
+        self.relayout();
+        let Some(i) = self.index_of(tab) else { return self.edit_written(path, false) };
+        self.tabs[i].view.evaluate(&edit::write_js(&text), move |r| send(Msg::EditWritten { path, ok: r.as_deref() == Ok("true") }));
+    }
+
+    fn edit_written(&mut self, path: PathBuf, ok: bool) {
+        if ok {
+            let _ = std::fs::remove_file(&path);
+        } else {
+            self.message = format!("field gone: text kept in {}", path.display());
+        }
+        self.draw();
+    }
+
     fn tick(&mut self) {
         self.saver.tick(&self.history, Instant::now());
         let frames = self.renderer.stats.lock().unwrap().frames;
@@ -769,7 +824,8 @@ impl App {
             Mode::Insert => {
                 if self.bindings.action(Scope::Insert, k) == Some(Action::Cancel) {
                     self.mode = Mode::Browse;
-                    self.view().evaluate("document.activeElement && document.activeElement.blur()", |_| {});
+                    // Kept for `g e` after Esc (edit.rs `READ_JS`).
+                    self.view().evaluate("(e=>{window.__zwebLastEdit=e;e&&e.blur()})(document.activeElement)", |_| {});
                     self.draw();
                 } else {
                     self.forward(&k);
@@ -911,6 +967,10 @@ impl App {
                 let focus = "(()=>{const e=[...document.querySelectorAll('input:not([type=hidden]),textarea,[contenteditable]')]\
                     .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
                 self.view().evaluate(focus, |r| send(Msg::Focused { ok: r.as_deref() == Ok("true") }));
+            }
+            Action::EditExternal => {
+                let tab = self.tab().id;
+                self.view().evaluate(edit::READ_JS, move |r| send(Msg::EditText { tab, json: r.map_err(|e| e.to_string()) }));
             }
             Action::Insert => self.mode = Mode::Insert,
             Action::Hints => self.start_hints(false),

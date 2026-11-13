@@ -59,6 +59,7 @@ actions! {
     Tab9 => "tab_9", "Select browser tab 9";
     Insert => "insert", "Send keys to the page";
     FocusInput => "focus_input", "Focus the first text field";
+    EditExternal => "edit_external", "Edit the text field in $EDITOR";
     Hints => "hints", "Show link hints";
     HintsNewTab => "hints_new_tab", "Show hints to open in a new tab";
     CopyUrl => "copy_url", "Copy the current URL";

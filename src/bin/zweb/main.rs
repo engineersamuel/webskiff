@@ -3,9 +3,18 @@
 //! zweb [url] [--gfx kitty|shm|blocks] [--scale N]
 //! zweb --selftest      checks input, hints, popups, dialogs and frame cost headless
 
+/// A JS function: is the element a text field (editable)?
+macro_rules! editable {
+    () => {
+        "(e=>!!e&&(e.isContentEditable||e.tagName==='TEXTAREA'||(e.tagName==='INPUT'&&\
+         !/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(e.type))))"
+    };
+}
+
 mod app;
 mod cli;
 mod config;
+mod edit;
 mod history;
 mod input;
 mod keys;
@@ -15,6 +24,7 @@ mod trace;
 
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,6 +53,15 @@ fn redirect_stderr() -> i32 {
         libc::dup2(log.as_raw_fd(), 2);
         saved
     }
+}
+
+fn enter_screen(enhanced: bool) -> std::io::Result<()> {
+    let mut out = std::io::stdout();
+    execute!(out, terminal::EnterAlternateScreen, cursor::Hide, EnableMouseCapture, EnableBracketedPaste)?;
+    if enhanced {
+        let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+    }
+    Ok(())
 }
 
 fn restore_terminal(enhanced: bool) {
@@ -142,11 +161,7 @@ fn main() {
         if shm { Gfx::KittyShm } else if kitty || known_kitty { Gfx::KittyDirect } else { Gfx::Blocks }
     });
     let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
-    let mut out = std::io::stdout();
-    execute!(out, terminal::EnterAlternateScreen, cursor::Hide, EnableMouseCapture, EnableBracketedPaste).unwrap();
-    if enhanced {
-        let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
-    }
+    enter_screen(enhanced).unwrap();
     eprintln!("zweb start: kitty={kitty} shm={shm} known={known_kitty} gfx={gfx:?} enhanced_keys={enhanced}");
 
     std::panic::set_hook(Box::new(move |info| {
@@ -184,18 +199,26 @@ fn main() {
     }
     let code = zebkit::run_with_args(engine_args, move || {
         APP.with(|a| {
-            let mut app = App::new(r, Options { scale, placeholders }, config);
+            let mut app = App::new(r, Options { scale, placeholders, enhanced }, config);
             app.relayout();
             app.open_tab(Some(&url), None);
             *a.borrow_mut() = Some(app);
         });
         // Terminal input on its own thread, each event posted to the engine's.
+        // No reads while an external editor has the terminal (edit.rs).
         std::thread::spawn(|| loop {
-            match event::read() {
-                Ok(ev) => {
+            if edit::INPUT_PAUSED.load(Ordering::SeqCst) {
+                edit::INPUT_IDLE.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            edit::INPUT_IDLE.store(false, Ordering::SeqCst);
+            match event::poll(Duration::from_millis(50)).and_then(|ready| ready.then(event::read).transpose()) {
+                Ok(Some(ev)) => {
                     trace!("input read {ev:?}");
                     zebkit::post(move || send(Msg::Term(ev)))
                 }
+                Ok(None) => {}
                 Err(_) => return,
             }
         });
