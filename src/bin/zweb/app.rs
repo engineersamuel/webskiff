@@ -293,6 +293,8 @@ pub struct App {
     last_stats: u64,
     history: History,
     saver: Saver,
+    /// A `g e` edit runs, from its read to its write-back: no second one.
+    editing: bool,
 }
 
 impl App {
@@ -332,6 +334,7 @@ impl App {
             last_stats: 0,
             history: load_history(),
             saver: Saver::spawn(crate::data_dir().join("history.tsv")),
+            editing: false,
         }
     }
 
@@ -750,6 +753,7 @@ impl App {
     fn edit_text(&mut self, tab: u64, json: Result<String, String>) {
         let v: serde_json::Value = json.ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
         let Some(original) = v["text"].as_str().map(String::from) else {
+            self.editing = false;
             self.message = match v.as_str() {
                 Some("password") => "password field: not edited",
                 Some("readonly") => "read-only field: not edited",
@@ -761,6 +765,7 @@ impl App {
         let path = match edit::temp_file(&original) {
             Ok(path) => path,
             Err(error) => {
+                self.editing = false;
                 self.message = format!("cannot write edit file: {error}");
                 return self.draw();
             }
@@ -777,6 +782,7 @@ impl App {
         let text = match edited {
             Edited::Text(text) => text,
             other => {
+                self.editing = false;
                 let _ = std::fs::remove_file(&path);
                 self.message = if matches!(other, Edited::Failed) { "editor failed: no change" } else { "no change" }.into();
                 return self.relayout();
@@ -788,6 +794,7 @@ impl App {
     }
 
     fn edit_written(&mut self, path: PathBuf, ok: bool) {
+        self.editing = false;
         if ok {
             let _ = std::fs::remove_file(&path);
         } else {
@@ -973,7 +980,12 @@ impl App {
                     .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
                 self.view().evaluate(focus, |r| send(Msg::Focused { ok: r.as_deref() == Ok("true") }));
             }
+            Action::EditExternal if self.editing => {
+                self.message = "editor already open".into();
+                self.draw();
+            }
             Action::EditExternal => {
+                self.editing = true;
                 let tab = self.tab().id;
                 self.view().evaluate(edit::READ_JS, move |r| send(Msg::EditText { tab, json: r.map_err(|e| e.to_string()) }));
             }
