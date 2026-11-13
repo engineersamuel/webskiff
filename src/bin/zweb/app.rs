@@ -1011,7 +1011,10 @@ impl App {
                 let tab = &mut self.tabs[i];
                 (tab.loading, tab.committed, tab.pending_title) = (true, false, None);
             }
-            LoadEvent::Committed => self.load_committed(i, url),
+            LoadEvent::Committed => {
+                self.load_committed(i, url);
+                self.draw_tab_picker();
+            }
             LoadEvent::Finished => {
                 self.tabs[i].loading = false;
                 if i == self.active {
@@ -1078,6 +1081,7 @@ impl App {
                 self.saver.changed(Instant::now());
             }
             tab.title = title;
+            self.draw_tab_picker();
             self.draw();
         }
     }

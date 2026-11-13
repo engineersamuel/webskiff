@@ -224,6 +224,21 @@ def pick_tab(before, query, target, cancel=False, timed=False):
     return after
 
 
+def pick_retitled_tab():
+    """The picker lists a tab once its new title matches; Enter picks it."""
+    press(b"t", expected="NEW TAB")
+    os.write(fd, (fixture + "?retitle").encode() + b"\r")
+    wait_for(b" Quokka ")
+    until(b"T", lambda raw: bool(picker_rows(raw)))
+    os.write(fd, b"zbr")
+    rows = picker_rows(b"".join(data for _, data in pump(0.3)))
+    assert rows == [], f"'zbr' lists {rows} before the title change"
+    wait_for(b"\x1b[2;3H2: Zebra")
+    raw = until(b"\r", page_image)
+    assert active_tab(raw) == 2, f"active tab {active_tab(raw)} after Enter, not 2"
+    press(b"x", expected="\x1b[7m 1")
+
+
 def wait_for_fixture(text=b"keyboard fixture", keys=None):
     output = bytearray()
     deadline = time.monotonic() + 20
@@ -461,6 +476,7 @@ try:
         pick_tab(active, "", active, cancel=True)
         press(b"x")
         press(b"x", expected="\x1b[7m 1")
+        pick_retitled_tab()
         print("KEYBOARD CHECKS PASSED")
         if args.check_only:
             # g e on a password field: refused, the editor does not run.

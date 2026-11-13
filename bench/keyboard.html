@@ -27,6 +27,11 @@
   if (title) {
     document.title = title;
   }
+  // The URL has no "z": only the later title matches "zbr".
+  if (new URLSearchParams(location.search).has("retitle")) {
+    document.title = "Quokka";
+    setTimeout(() => { document.title = "Zebra"; }, 3000);
+  }
   if (!location.search) {
     document.addEventListener("selectionchange", () => {
       const selection = getSelection();
