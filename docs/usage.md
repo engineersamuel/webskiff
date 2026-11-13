@@ -32,6 +32,11 @@ When the current match is in a link, Enter opens that link. Escape in the
 prompt restores the original selection and scroll; Escape after it clears the marks.
 Ctrl-F leaves its prompt open; Enter/Shift-Enter moves next/previous.
 
+`f` shows link hints; type a hint's letters to follow it. `F` opens the link
+in a new tab. `g f` shows filtered hints: letters filter by link text
+(any case), digits pick fixed labels, and Enter picks the first match. One
+match left is followed at once. Backspace undoes a key; Escape cancels.
+
 Prompts support arrows, Home/End, Delete/Backspace, paste at the cursor,
 Ctrl-U to clear, and Ctrl-W to delete a word. Focused page text fields receive
 typing; Escape returns to browser shortcuts. Pages that focus an input on load
