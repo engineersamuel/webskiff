@@ -21,6 +21,10 @@ use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse, WheelPhase
 use zebkit::page::{Dialog, DialogPolicy, DialogType};
 use zebkit::{LoadEvent, View};
 
+#[cfg(not(test))]
+use zebkit::{after, View as TabView};
+#[cfg(test)]
+use jumps_tests::{after, TestView as TabView};
 use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::edit::{self, Edited};
 use crate::history::{self, Completion, History, Saver};
@@ -277,7 +281,7 @@ impl Prompt {
 
 struct Tab {
     nav: TabNav,
-    view: View,
+    view: TabView,
     title: String,
     loading: bool,
     popup: bool,
@@ -787,6 +791,8 @@ impl App {
         if let Some(url) = url {
             view.load_url(url);
         }
+        #[cfg(test)]
+        let view = TabView::from(view);
         self.tabs.push(Tab {
             nav: TabNav::new(id, url.unwrap_or("").into()),
             view,
@@ -877,7 +883,7 @@ impl App {
         &self.tabs[self.active]
     }
 
-    pub(crate) fn view(&self) -> View {
+    pub(crate) fn view(&self) -> TabView {
         self.tab().view.clone()
     }
 
@@ -1661,7 +1667,7 @@ impl App {
     fn schedule_prepare(&mut self) {
         self.prep_gen += 1;
         let gen = self.prep_gen;
-        zebkit::after(Duration::from_millis(200), move || {
+        after(Duration::from_millis(200), move || {
             send(Msg::Prepare { gen })
         });
     }
@@ -2705,6 +2711,208 @@ fn url_root(url: &str) -> Option<String> {
 
 pub fn home() -> &'static str {
     HOME
+}
+
+#[cfg(test)]
+mod jumps_tests {
+    use super::*;
+
+    // Only the engine boundary is replaced; App and Renderer use their real methods.
+    #[derive(Clone, Default)]
+    pub(crate) struct TestView {
+        real: Option<View>,
+        calls: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl From<View> for TestView {
+        fn from(real: View) -> Self {
+            Self { real: Some(real), ..Self::default() }
+        }
+    }
+
+    impl std::ops::Deref for TestView {
+        type Target = View;
+
+        fn deref(&self) -> &View {
+            self.real.as_ref().expect("unexpected engine operation in App test")
+        }
+    }
+
+    impl TestView {
+        pub fn load_url(&self, url: &str) {
+            self.calls.borrow_mut().push(format!("load {url}"));
+        }
+
+        pub fn stop(&self) {
+            self.calls.borrow_mut().push("stop".into());
+        }
+
+        pub fn close(&self) {
+            self.calls.borrow_mut().push("close".into());
+        }
+
+        pub fn set_focus(&self, _focused: bool) {}
+        pub fn request_frame(&self) {}
+        pub fn evaluate(&self, _source: &str, _done: impl FnOnce(Result<String, zebkit::Error>) + 'static) {}
+    }
+
+    pub(super) fn after(_delay: Duration, _done: impl FnOnce() + 'static) {}
+
+    fn app_with_tabs(urls: &[&str]) -> App {
+        let renderer = Arc::new(Renderer::new(crate::render::Gfx::KittyDirect));
+        let mut app = App::new(renderer, Options { scale: None, placeholders: false, enhanced: false }, Config::default());
+        for (i, url) in urls.iter().enumerate() {
+            app.tabs.push(Tab {
+                nav: TabNav::new(i as u64 + 1, (*url).into()),
+                view: TestView::default(),
+                title: String::new(),
+                loading: false,
+                popup: false,
+                pending_title: None,
+                committed: false,
+            });
+        }
+        app
+    }
+
+    fn committed(app: &App, i: usize, url: &str) -> Msg {
+        Msg::Load { tab: app.tabs[i].id(), event: LoadEvent::Committed, url: url.into() }
+    }
+
+    fn visit(app: &mut App, i: usize, url: &str) {
+        app.handle(committed(app, i, url));
+    }
+
+    fn restoring() -> App {
+        let mut app = app_with_tabs(&["a", "x"]);
+        for url in ["a", "b", "c"] {
+            visit(&mut app, 0, url);
+        }
+        app.jump(true);
+        assert_eq!(app.tabs[0].nav.current().url, "b");
+        app
+    }
+
+    #[test]
+    fn app_jumps_ignore_queued_commits_from_superseded_loads() {
+        let mut app = restoring();
+        let stale_b = committed(&app, 0, "b");
+        app.jump(true);
+        let stale_a = committed(&app, 0, "a");
+        app.jump(false);
+        for stale in [stale_b, stale_a] {
+            app.handle(stale);
+            assert_eq!(app.tabs[0].url(), "c");
+            assert_eq!(app.tabs[0].nav.current().url, "b");
+        }
+        visit(&mut app, 0, "b");
+        app.jump(false);
+        assert_eq!(app.tabs[0].nav.current().url, "c");
+        assert_eq!(&*app.tabs[0].view.calls.borrow(), &["load b", "stop", "load a", "stop", "load b", "load c"]);
+    }
+
+    #[test]
+    fn app_jumps_restarting_same_target_ignores_old_completion() {
+        let mut app = restoring();
+        let stale = committed(&app, 0, "b");
+        app.jump(false);
+        assert_eq!(app.tab().url(), "c");
+        app.jump(true);
+        app.handle(stale);
+        assert_eq!(app.tab().url(), "c");
+        visit(&mut app, 0, "b");
+        app.jump(false);
+        assert_eq!(app.tab().nav.current().url, "c");
+    }
+
+    #[test]
+    fn app_jumps_redirects_preserve_forward_history() {
+        let mut app = restoring();
+        visit(&mut app, 0, "redirected-b");
+        assert_eq!(app.tabs[0].url(), "redirected-b");
+        app.jump(false);
+        assert_eq!(app.tabs[0].nav.current().url, "c");
+    }
+
+    #[test]
+    fn app_jumps_user_switch_records_pending_target_in_both_directions() {
+        let mut app = restoring();
+        app.switch(1);
+        app.switch(0);
+        assert_eq!(app.tabs[0].nav.current().url, "b");
+        visit(&mut app, 0, "redirected-b");
+        app.jump(true);
+        assert_eq!(app.active, 1);
+        app.jump(true);
+        assert_eq!(app.active, 0);
+        assert_eq!(app.tabs[0].nav.current().url, "b");
+    }
+
+    #[test]
+    fn app_jumps_close_during_restore_does_not_suppress_next_navigation() {
+        let mut app = restoring();
+        let closed = app.tabs[0].view.clone();
+        let stale = committed(&app, 0, "b");
+        app.close_tab();
+        assert_eq!(closed.calls.borrow().last().unwrap(), "close");
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tab().id(), 2);
+        app.handle(stale);
+        visit(&mut app, 0, "y");
+        app.jump(true);
+        assert_eq!(app.tab().nav.current().url, "x");
+        app.jump(false);
+        assert_eq!(app.tab().nav.current().url, "y");
+        app.jump(true);
+        app.jump(true);
+        assert_eq!(app.message, "no earlier jump");
+    }
+
+    #[test]
+    fn app_jumps_failed_and_stop_clear_pending() {
+        for failed in [true, false] {
+            let mut app = restoring();
+            if failed {
+                app.load_event(1, LoadEvent::Failed, "b".into());
+                assert_eq!(app.message, "load failed: b");
+                assert!(!app.tab().loading);
+            } else {
+                assert!(app.navigation_command(Action::Stop));
+                assert_eq!(app.tab().view.calls.borrow().last().unwrap(), "stop");
+            }
+            assert_eq!(app.tab().nav.current().url, "c");
+            visit(&mut app, 0, "d");
+            app.jump(true);
+            assert_eq!(app.tab().nav.current().url, "b");
+            app.jump(false);
+            assert_eq!(app.tab().nav.current().url, "d");
+        }
+    }
+
+    #[test]
+    fn app_jumps_background_commit_and_jump_switch_do_not_record() {
+        let mut app = app_with_tabs(&["a", "x"]);
+        visit(&mut app, 0, "a");
+        app.switch(1);
+        app.jump(true);
+        assert_eq!(app.active, 0);
+        visit(&mut app, 1, "redirected-x");
+        assert_eq!(app.tabs[1].url(), "redirected-x");
+        app.jump(false);
+        assert_eq!(app.active, 1);
+        assert_eq!(app.tab().nav.current().url, "x");
+        assert_eq!(app.tab().view.calls.borrow().last().unwrap(), "load x");
+    }
+
+    #[test]
+    fn app_help_uses_keyboard_enhancement_option() {
+        for enhanced in [false, true] {
+            let renderer = Arc::new(Renderer::new(crate::render::Gfx::KittyDirect));
+            let app = App::new(renderer, Options { scale: None, placeholders: false, enhanced }, Config::default());
+            assert_eq!(app.help_lines.iter().any(|line| line.contains("Ctrl-I")), enhanced);
+        }
+    }
+
 }
 
 fn display_char(c: char) -> char {

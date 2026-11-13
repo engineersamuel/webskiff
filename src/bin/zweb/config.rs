@@ -246,6 +246,13 @@ pub struct Config {
     modes: [ModeKeys; 7],
 }
 
+#[cfg(test)]
+impl Default for Config {
+    fn default() -> Self {
+        Self::parse("").unwrap()
+    }
+}
+
 pub enum Binding {
     Action(Action),
     Prefix(Stroke),

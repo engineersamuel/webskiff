@@ -335,6 +335,24 @@ mod tests {
     }
 
     #[test]
+    fn jumps_redirected_restore_is_not_a_new_navigation() {
+        let mut jumps = Jumps::default();
+        for url in ["a", "b", "c"] {
+            jumps.record(jump(1, url));
+        }
+        let mut tab = super::TabNav::new(1, "c".into());
+        let target = jumps.back(tab.current()).unwrap();
+        tab.jump_to(&target.url);
+        assert!(tab.commit("redirected-b".into(), true, &mut jumps));
+        assert_eq!(tab.current(), jump(1, "redirected-b"));
+        assert_eq!(jumps.forward(), Some(jump(1, "c")));
+        assert_eq!(jumps.back(tab.current()), Some(jump(1, "b")));
+        assert!(tab.commit("d".into(), true, &mut jumps));
+        assert_eq!(jumps.forward(), None);
+        assert_eq!(jumps.back(tab.current()), Some(jump(1, "b")));
+    }
+
+    #[test]
     fn background_commit_preserves_forward_jump() {
         let mut jumps = Jumps::default();
         jumps.record(jump(1, "a"));
