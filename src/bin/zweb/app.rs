@@ -2511,6 +2511,39 @@ mod tests {
         assert_eq!(filter("home", "3"), [2]);
     }
 
+    fn filter_hints_of(list: &str) -> Vec<super::Hint> {
+        super::parse_hints(&serde_json::to_string(list).unwrap()).2
+    }
+
+    #[test]
+    fn filter_keys_typed_while_targets_load_apply_in_order_when_they_arrive() {
+        use super::{FilterKey::*, FilterStep::*, HintFilter};
+        let hints = filter_hints_of(
+            r#"[{"k":"1","t":"link one"},{"k":"2","t":"lion"},{"k":"3","t":"link two"}]"#,
+        );
+        let mut f = HintFilter::default();
+        for c in "lin".chars() {
+            assert_eq!(f.key(&[], Char(c)), None);
+        }
+        assert_eq!(f.ready(&hints), Some(Show(vec![0, 2])));
+        let mut f = HintFilter::default();
+        for c in "lio".chars() {
+            f.key(&[], Char(c));
+        }
+        assert_eq!(f.ready(&hints), Some(Pick(1)));
+        // A queued Enter picks the first match once there are targets.
+        let mut f = HintFilter::default();
+        f.key(&[], Char('k'));
+        f.key(&[], Accept);
+        assert_eq!(f.ready(&hints), Some(Pick(0)));
+        // No targets at all: a queued Enter picks nothing.
+        let mut f = HintFilter::default();
+        f.key(&[], Accept);
+        assert_eq!(f.ready(&[]), None);
+        // Nothing queued: nothing to do.
+        assert_eq!(HintFilter::default().ready(&hints), None);
+    }
+
     #[test]
     fn opens_existing_relative_and_absolute_files() {
         let path = std::fs::canonicalize("README.md").unwrap();
