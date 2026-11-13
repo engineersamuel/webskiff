@@ -54,6 +54,10 @@ impl TabNav {
         self.pending = None;
     }
 
+    pub fn restoring(&self) -> bool {
+        matches!(self.pending, Some(PendingJump::Restoring(_)))
+    }
+
     pub fn jump_to(&mut self, url: &str) -> NavOp {
         if self.url == url {
             if let Some(PendingJump::Restoring(old)) = self.pending.take() {
@@ -70,7 +74,7 @@ impl TabNav {
     pub fn commit(&mut self, url: String, active: bool, jumps: &mut Jumps) -> bool {
         match self.pending.take() {
             Some(PendingJump::Superseded(stale)) if stale == url => return false,
-            Some(PendingJump::Restoring(want)) if want == url => {
+            Some(PendingJump::Restoring(_)) => {
                 self.url = url;
             }
             _ => {

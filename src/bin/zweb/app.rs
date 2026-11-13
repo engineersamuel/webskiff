@@ -29,7 +29,7 @@ use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::edit::{self, Edited};
 use crate::history::{self, Completion, History, Saver};
 use crate::input::{self, Edit, TextInput};
-use crate::jumps::{Jump, Jumps, NavOp, TabNav};
+use crate::jumps::{Jumps, NavOp, TabNav};
 use crate::keys;
 use crate::render::{Hop, Layout, Renderer};
 
@@ -63,6 +63,7 @@ pub enum Msg {
     Term(Event),
     Load {
         tab: u64,
+        generation: u64,
         event: LoadEvent,
         url: String,
     },
@@ -282,6 +283,7 @@ impl Prompt {
 struct Tab {
     nav: TabNav,
     view: TabView,
+    load_generation: Rc<Cell<u64>>,
     title: String,
     loading: bool,
     popup: bool,
@@ -756,9 +758,12 @@ impl App {
                 renderer.submit(frame);
             }
         });
+        let load_generation = Rc::new(Cell::new(0));
+        let generation = load_generation.clone();
         view.on_load(move |event, url| {
             send(Msg::Load {
                 tab: id,
+                generation: generation.get(),
                 event,
                 url: url.into(),
             })
@@ -796,6 +801,7 @@ impl App {
         self.tabs.push(Tab {
             nav: TabNav::new(id, url.unwrap_or("").into()),
             view,
+            load_generation,
             title: String::new(),
             loading: url.is_some(),
             popup: false,
@@ -822,7 +828,7 @@ impl App {
             if self.mode == Mode::Visual {
                 old.view.evaluate(COLLAPSE_JS, |_| {});
             }
-            Jump { tab: old.id(), url: old.url().into() }
+            old.nav.current()
         });
         self.active = index;
         self.find_generation += 1;
@@ -911,7 +917,7 @@ impl App {
     pub fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Term(event) => self.terminal_event(event),
-            Msg::Load { tab, event, url } => self.load_event(tab, event, url),
+            Msg::Load { tab, generation, event, url } => self.load_event(tab, generation, event, url),
             Msg::Title { tab, title } => self.title_changed(tab, title),
             Msg::Caret { tab, on } => self.caret_changed(tab, on),
             Msg::Popup { tab, rect } => self.popup_changed(tab, rect),
@@ -960,8 +966,11 @@ impl App {
         }
     }
 
-    fn load_event(&mut self, tab: u64, event: LoadEvent, url: String) {
+    fn load_event(&mut self, tab: u64, generation: u64, event: LoadEvent, url: String) {
         let Some(i) = self.index_of(tab) else { return };
+        if generation != self.tabs[i].load_generation.get() {
+            return;
+        }
         match event {
             LoadEvent::Started => {
                 let tab = &mut self.tabs[i];
@@ -1418,9 +1427,9 @@ impl App {
     }
 
     fn record_jump(&mut self, i: usize) {
-        let tab = &self.tabs[i];
-        if !tab.url().is_empty() {
-            self.jumps.record(Jump { tab: tab.id(), url: tab.url().into() });
+        let current = self.tabs[i].nav.current();
+        if !current.url.is_empty() {
+            self.jumps.record(current);
         }
     }
 
@@ -1433,10 +1442,21 @@ impl App {
             return;
         };
         self.switch_inner(i, false);
-        match self.tabs[i].nav.jump_to(&url) {
-            NavOp::Load(url) => self.tabs[i].view.load_url(&url),
-            NavOp::Stop => self.tabs[i].view.stop(),
-            NavOp::None => {}
+        let tab = &mut self.tabs[i];
+        let restoring = tab.nav.restoring();
+        let op = tab.nav.jump_to(&url);
+        if op == NavOp::None {
+            return;
+        }
+        if restoring {
+            tab.view.stop();
+        }
+        // Stop the old load, then invalidate callbacks already queued by it.
+        tab.load_generation.set(tab.load_generation.get() + 1);
+        if let NavOp::Load(url) = op {
+            tab.view.load_url(&url);
+        } else {
+            tab.nav.clear_pending();
         }
     }
 
@@ -2751,6 +2771,9 @@ mod jumps_tests {
             self.calls.borrow_mut().push("close".into());
         }
 
+        pub fn go_back(&self) { self.calls.borrow_mut().push("back".into()); }
+        pub fn go_forward(&self) { self.calls.borrow_mut().push("forward".into()); }
+        pub fn reload(&self) { self.calls.borrow_mut().push("reload".into()); }
         pub fn set_focus(&self, _focused: bool) {}
         pub fn request_frame(&self) {}
         pub fn evaluate(&self, _source: &str, _done: impl FnOnce(Result<String, zebkit::Error>) + 'static) {}
@@ -2765,6 +2788,7 @@ mod jumps_tests {
             app.tabs.push(Tab {
                 nav: TabNav::new(i as u64 + 1, (*url).into()),
                 view: TestView::default(),
+                load_generation: Rc::new(Cell::new(0)),
                 title: String::new(),
                 loading: false,
                 popup: false,
@@ -2776,7 +2800,7 @@ mod jumps_tests {
     }
 
     fn committed(app: &App, i: usize, url: &str) -> Msg {
-        Msg::Load { tab: app.tabs[i].id(), event: LoadEvent::Committed, url: url.into() }
+        Msg::Load { tab: app.tabs[i].id(), generation: app.tabs[i].load_generation.get(), event: LoadEvent::Committed, url: url.into() }
     }
 
     fn visit(app: &mut App, i: usize, url: &str) {
@@ -2788,7 +2812,7 @@ mod jumps_tests {
         for url in ["a", "b", "c"] {
             visit(&mut app, 0, url);
         }
-        app.jump(true);
+        assert!(app.navigation_command(Action::JumpBack));
         assert_eq!(app.tabs[0].nav.current().url, "b");
         app
     }
@@ -2828,10 +2852,29 @@ mod jumps_tests {
     #[test]
     fn app_jumps_redirects_preserve_forward_history() {
         let mut app = restoring();
+        app.extents = Some((0.0, 100.0, 200.0));
+        app.mode = Mode::Hint;
+        app.prepared = Some((1, String::new(), Hop { png: String::new(), cells: Vec::new(), dim: [0; 4] }, Vec::new()));
         visit(&mut app, 0, "redirected-b");
         assert_eq!(app.tabs[0].url(), "redirected-b");
-        app.jump(false);
+        assert!(app.extents.is_none());
+        assert!(app.mode == Mode::Browse);
+        assert!(app.prepared.is_none());
+        assert!(app.navigation_command(Action::JumpForward));
         assert_eq!(app.tabs[0].nav.current().url, "c");
+    }
+
+    #[test]
+    fn app_jumps_initial_blank_commit_does_not_consume_restore() {
+        let mut app = restoring();
+        visit(&mut app, 0, "about:blank");
+        assert_eq!(app.tab().url(), "c");
+        assert_eq!(app.tab().nav.current().url, "b");
+        assert_eq!(app.tab().view.calls.borrow().last().unwrap(), "forward");
+        assert_eq!(app.message, "no earlier page");
+        visit(&mut app, 0, "b");
+        app.jump(false);
+        assert_eq!(app.tab().nav.current().url, "c");
     }
 
     #[test]
@@ -2840,7 +2883,7 @@ mod jumps_tests {
         app.switch(1);
         app.switch(0);
         assert_eq!(app.tabs[0].nav.current().url, "b");
-        visit(&mut app, 0, "redirected-b");
+        visit(&mut app, 0, "b");
         app.jump(true);
         assert_eq!(app.active, 1);
         app.jump(true);
@@ -2869,17 +2912,22 @@ mod jumps_tests {
     }
 
     #[test]
-    fn app_jumps_failed_and_stop_clear_pending() {
-        for failed in [true, false] {
+    fn app_jumps_failed_and_navigation_commands_clear_pending() {
+        for (action, expected) in [(None, ""), (Some(Action::Stop), "stop"), (Some(Action::Back), "back"),
+            (Some(Action::Forward), "forward"), (Some(Action::Reload), "reload")] {
             let mut app = restoring();
-            if failed {
-                app.load_event(1, LoadEvent::Failed, "b".into());
-                assert_eq!(app.message, "load failed: b");
-                assert!(!app.tab().loading);
-            } else {
-                assert!(app.navigation_command(Action::Stop));
-                assert_eq!(app.tab().view.calls.borrow().last().unwrap(), "stop");
+            match action {
+                Some(action) => {
+                    assert!(app.navigation_command(action));
+                    assert_eq!(app.tab().view.calls.borrow().last().unwrap(), expected);
+                }
+                None => {
+                    app.load_event(1, app.tab().load_generation.get(), LoadEvent::Failed, "b".into());
+                    assert_eq!(app.message, "load failed: b");
+                    assert!(!app.tab().loading);
+                }
             }
+            assert!(!app.navigation_command(Action::NextTab));
             assert_eq!(app.tab().nav.current().url, "c");
             visit(&mut app, 0, "d");
             app.jump(true);
@@ -2892,12 +2940,15 @@ mod jumps_tests {
     #[test]
     fn app_jumps_background_commit_and_jump_switch_do_not_record() {
         let mut app = app_with_tabs(&["a", "x"]);
-        visit(&mut app, 0, "a");
+        app.tabs[0].nav.open("uncommitted-a".into());
         app.switch(1);
         app.jump(true);
         assert_eq!(app.active, 0);
+        assert_eq!(app.tab().nav.current().url, "uncommitted-a");
+        app.extents = Some((0.0, 100.0, 200.0));
         visit(&mut app, 1, "redirected-x");
         assert_eq!(app.tabs[1].url(), "redirected-x");
+        assert_eq!(app.extents, Some((0.0, 100.0, 200.0)));
         app.jump(false);
         assert_eq!(app.active, 1);
         assert_eq!(app.tab().nav.current().url, "x");
