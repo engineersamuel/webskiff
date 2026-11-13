@@ -50,6 +50,10 @@ actions! {
     Forward => "forward", "History forward";
     Reload => "reload", "Reload the page";
     Stop => "stop", "Stop loading";
+    UrlUp => "url_up", "Go up one level in the address";
+    UrlRoot => "url_root", "Go to the root of the address";
+    NextPage => "next_page", "Follow the next page link";
+    PreviousPage => "previous_page", "Follow the previous page link";
     Tab1 => "tab_1", "Select browser tab 1";
     Tab2 => "tab_2", "Select browser tab 2";
     Tab3 => "tab_3", "Select browser tab 3";
