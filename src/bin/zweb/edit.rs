@@ -75,7 +75,7 @@ pub const READ_JS: &str = concat!(
     ";let e=document.activeElement;if(!(ok(e)&&e.isConnected))e=window.__zwebLastEdit;\
      if(!(ok(e)&&e.isConnected))return null;\
      if(e.tagName==='INPUT'&&e.type.toLowerCase()==='password')return 'password';\
-     if(e.readOnly||e.disabled)return 'readonly';\
+     if(e.readOnly||e.matches(':disabled'))return 'readonly';\
      window.__zwebEditTarget=e;return {text:e.isContentEditable?e.innerText:e.value,input:e.tagName==='INPUT'}})()"
 );
 
@@ -84,7 +84,7 @@ pub const READ_JS: &str = concat!(
 pub fn write_js(text: &str) -> String {
     let t = serde_json::to_string(text).unwrap_or_default();
     format!(
-        "(t=>{{const e=window.__zwebEditTarget;if(!e||!e.isConnected||e.readOnly||e.disabled)return false;e.focus();\
+        "(t=>{{const e=window.__zwebEditTarget;if(!e||!e.isConnected||e.readOnly||e.matches(':disabled'))return false;e.focus();\
          if(e.isContentEditable)document.execCommand('selectAll');else e.select();\
          if(!document.execCommand('insertText',false,t)){{\
          if(e.isContentEditable)e.innerText=t;else Object.getOwnPropertyDescriptor(\
