@@ -429,6 +429,42 @@ mod tests {
     }
 
     #[test]
+    fn history_saver_retries_failed_background_save_on_finish_without_later_changes() {
+        let dir = temp_dir("saver-retry");
+        let path = dir.join("missing").join("history.tsv");
+        let start = Instant::now();
+        let mut saver = Saver::spawn(path.clone());
+        let mut history = History::default();
+        for (url, at) in [
+            ("https://first.example/", NOW - DAY),
+            ("https://first.example/", NOW),
+            ("https://second.example/", NOW - DAY),
+        ] {
+            assert!(history.visit(url, at));
+            saver.changed(start);
+        }
+        assert!(saver.tick(&history, start + SAVE_DELAY));
+        // Drain and join the writer before recovery, so the queued write must fail.
+        saver.to_thread = None;
+        saver.thread.take().unwrap().join().unwrap();
+        assert!(!path.exists());
+        assert!(!saver.tick(&history, start + 2 * SAVE_DELAY));
+
+        std::fs::create_dir(path.parent().unwrap()).unwrap();
+        saver.finish(&history);
+        let loaded = History::load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(loaded.len(), history.len());
+        for expected in &history.entries {
+            let actual = loaded.get(&expected.url).unwrap();
+            assert_eq!(
+                (actual.url.as_str(), actual.visits, actual.last),
+                (expected.url.as_str(), expected.visits, expected.last)
+            );
+        }
+    }
+
+    #[test]
     fn history_completion_cycles_through_matches() {
         let mut history = History::default();
         history.visit("https://third.example/", NOW);
