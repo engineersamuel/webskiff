@@ -17,6 +17,7 @@ use zebkit::{LoadEvent, View};
 
 use crate::keys;
 use crate::config::{Action, Binding, Config, Scope, Stroke};
+use crate::history::{self, Completion, History, Saver};
 use crate::input::{self, Edit, TextInput};
 use crate::render::{Hop, Layout, Renderer};
 
@@ -104,24 +105,67 @@ struct Prompt {
     not_found: bool,
     keep_open: bool,
     hint: String,
+    /// The Tab/Shift-Tab session, from the text typed before the first Tab.
+    completion: Option<Completion>,
+    /// The best history match for the typed text (Open prompts only).
+    suggestion: Option<String>,
 }
 
 impl Prompt {
-    fn body(&self, room: usize) -> String {
+    fn new(kind: PromptKind, label: &str, text: &str) -> Self {
+        Self { kind, label: label.into(), input: TextInput::new(text), not_found: false, keep_open: false,
+            hint: String::new(), completion: None, suggestion: None }
+    }
+
+    fn completes(&self) -> bool {
+        matches!(self.kind, PromptKind::Open | PromptKind::OpenTab)
+    }
+
+    /// Replaces the input with the next (or previous) history match.
+    fn complete(&mut self, history: &History, back: bool, now: u64) {
+        if !self.completes() {
+            return;
+        }
+        let text = &self.input.text;
+        let completion = self.completion.get_or_insert_with(|| Completion::new(history, text, now));
+        if let Some(url) = completion.step(back) {
+            self.input = TextInput::new(url);
+            self.suggestion = None;
+        }
+    }
+
+    /// After an edit: a new completion session and a new best match.
+    fn suggest(&mut self, history: &History, now: u64) {
+        self.completion = None;
+        self.suggestion = None;
+        if self.completes() && !self.input.text.trim().is_empty() {
+            self.suggestion = history.top(&self.input.text, now).first().map(|e| e.url.clone());
+        }
+    }
+
+    /// The text, and the dim best match drawn after it.
+    fn body(&self, room: usize) -> (String, String) {
         if room == 0 {
-            return String::new();
+            return Default::default();
         }
         let (before, after) = self.input.text.split_at(self.input.cursor);
         let prefix = format!(" {}{before}█", self.label);
         if prefix.chars().map(display_char).map(|c| c.width().unwrap_or(0)).sum::<usize>() > room {
-            return clip_start(&prefix, room);
+            return (clip_start(&prefix, room), String::new());
         }
         let hint = if self.not_found { "  not found" } else if self.input.text.is_empty() {
             &self.hint
         } else { "" };
-        clip(&format!("{prefix}{after}{hint}"), room)
+        let text = clip(&format!("{prefix}{after}{hint}"), room);
+        let dim = match self.suggestion.as_deref() {
+            Some(url) if after.is_empty() => match url.strip_prefix(self.input.text.as_str()) {
+                Some(rest) => clip(rest, room - text.width()),
+                None => clip(&format!("  → {url}"), room - text.width()),
+            },
+            _ => String::new(),
+        };
+        (text, dim)
     }
-
 }
 
 struct Tab {
@@ -131,6 +175,10 @@ struct Tab {
     url: String,
     loading: bool,
     popup: bool,
+    /// A title that came before its page's commit: applied to history on commit.
+    pending_title: Option<String>,
+    /// The page shown is the one loading (its load committed).
+    committed: bool,
 }
 
 struct Hint {
@@ -235,6 +283,8 @@ pub struct App {
     last_click: (Instant, f32, f32, u32),
     mouse: (f32, f32),
     last_stats: u64,
+    history: History,
+    saver: Saver,
 }
 
 impl App {
@@ -272,6 +322,8 @@ impl App {
             last_click: (Instant::now() - Duration::from_secs(10), 0.0, 0.0, 0),
             mouse: (0.0, 0.0),
             last_stats: 0,
+            history: load_history(),
+            saver: Saver::spawn(crate::data_dir().join("history.tsv")),
         }
     }
 
@@ -378,7 +430,8 @@ impl App {
         if let Some(url) = url {
             view.load_url(url);
         }
-        self.tabs.push(Tab { id, view, title: String::new(), url: url.unwrap_or("").into(), loading: url.is_some(), popup: false });
+        self.tabs.push(Tab { id, view, title: String::new(), url: url.unwrap_or("").into(), loading: url.is_some(), popup: false,
+            pending_title: None, committed: false });
         self.switch(self.tabs.len() - 1);
     }
 
@@ -432,6 +485,7 @@ impl App {
     }
 
     fn quit(&mut self) {
+        self.saver.finish(&self.history);
         zebkit::quit();
     }
 
@@ -473,7 +527,10 @@ impl App {
     fn load_event(&mut self, tab: u64, event: LoadEvent, url: String) {
         let Some(i) = self.index_of(tab) else { return };
         match event {
-            LoadEvent::Started => self.tabs[i].loading = true,
+            LoadEvent::Started => {
+                let tab = &mut self.tabs[i];
+                (tab.loading, tab.committed, tab.pending_title) = (true, false, None);
+            }
             LoadEvent::Committed => self.load_committed(i, url),
             LoadEvent::Finished => {
                 self.tabs[i].loading = false;
@@ -503,6 +560,14 @@ impl App {
             }
             return;
         }
+        tab.committed = true;
+        let mut changed = self.history.visit(&url, history::now());
+        if let Some(title) = tab.pending_title.take() {
+            changed |= self.history.set_title(&url, &title);
+        }
+        if changed {
+            self.saver.changed(Instant::now());
+        }
         tab.url = url;
         if self.prepared.as_ref().is_some_and(|p| p.0 == tab.id) {
             self.prepared = None;
@@ -519,7 +584,13 @@ impl App {
 
     fn title_changed(&mut self, tab: u64, title: String) {
         if let Some(i) = self.index_of(tab) {
-            self.tabs[i].title = title;
+            let tab = &mut self.tabs[i];
+            if !tab.committed {
+                tab.pending_title = Some(title.clone());
+            } else if self.history.set_title(&tab.url, &title) {
+                self.saver.changed(Instant::now());
+            }
+            tab.title = title;
             self.draw();
         }
     }
@@ -666,6 +737,7 @@ impl App {
     }
 
     fn tick(&mut self) {
+        self.saver.tick(&self.history, Instant::now());
         let frames = self.renderer.stats.lock().unwrap().frames;
         if frames != self.last_stats {
             self.last_stats = frames;
@@ -1235,6 +1307,7 @@ impl App {
                 return;
             }
             p.input.insert(text.trim_end_matches(['\r', '\n']));
+            p.suggest(&self.history, history::now());
             self.preview_find();
             return self.draw();
         }
@@ -1254,7 +1327,10 @@ impl App {
         let hint = format!("{task}; {} accepts, {} cancels",
             self.bindings.labels(Scope::Prompt, Action::Accept),
             self.bindings.labels(Scope::Prompt, Action::Cancel));
-        self.prompt = Some(Prompt { kind, label: label.into(), input: TextInput::new(text), not_found: false, keep_open: false, hint });
+        let mut prompt = Prompt::new(kind, label, text);
+        prompt.hint = hint;
+        prompt.suggest(&self.history, history::now());
+        self.prompt = Some(prompt);
     }
 
     fn prompt_key(&mut self, k: KeyEvent) {
@@ -1287,6 +1363,10 @@ impl App {
             Some(Action::Accept) => return self.prompt_done(true),
             Some(Action::PreviousMatch) if p.kind == PromptKind::Find => return self.prompt_match(true),
             Some(Action::NextMatch) if p.kind == PromptKind::Find => return self.prompt_match(false),
+            Some(action @ (Action::Complete | Action::CompletePrevious)) => {
+                p.complete(&self.history, action == Action::CompletePrevious, history::now());
+                false
+            }
             Some(action) if !yes_no => p.input.edit(action) == Edit::Changed,
             None if !yes_no => {
                 if let Some(c) = input::character(k) {
@@ -1297,6 +1377,7 @@ impl App {
             _ => false,
         };
         if changed {
+            p.suggest(&self.history, history::now());
             self.preview_find();
         }
         self.draw();
@@ -1404,17 +1485,20 @@ impl App {
         let s = *self.renderer.stats.lock().unwrap();
         let stats = format!(" {}x{} {:.0}ms {}KB {}new/{}moved ", s.width, s.height, s.last_ms, s.last_bytes / 1024, s.sent, s.moved);
         let room = cols.saturating_sub(tag.len() + stats.len() + 1);
-        let body = match &self.prompt {
+        let (body, dim) = match &self.prompt {
             Some(p) => p.body(room),
-            None if self.mode == Mode::Hint => format!(" type a hint: {}", self.hint_typed),
-            None if !self.message.is_empty() => format!(" {}  {}", self.message, self.tabs.get(self.active).map_or("", |t| &t.url)),
-            None => format!(" {}", self.tabs.get(self.active).map_or("", |t| &t.url)),
+            None if self.mode == Mode::Hint => (format!(" type a hint: {}", self.hint_typed), String::new()),
+            None if !self.message.is_empty() => (format!(" {}  {}", self.message, self.tabs.get(self.active).map_or("", |t| &t.url)), String::new()),
+            None => (format!(" {}", self.tabs.get(self.active).map_or("", |t| &t.url)), String::new()),
         };
         let body = clip(&body, room);
-        let pad = room.saturating_sub(body.width());
+        let pad = room.saturating_sub(body.width() + dim.width());
+        let _ = queue!(out, Print(&body));
+        if !dim.is_empty() {
+            let _ = queue!(out, SetForegroundColor(Color::DarkGrey), Print(&dim), SetForegroundColor(Color::Reset));
+        }
         let _ = queue!(
             out,
-            Print(&body),
             Print(" ".repeat(pad + 1)),
             SetForegroundColor(Color::DarkGrey),
             Print(&stats),
@@ -1494,6 +1578,14 @@ impl App {
 }
 
 /// Resolves an address as a URL, an existing local file, a host, or a search.
+fn load_history() -> History {
+    let path = crate::data_dir().join("history.tsv");
+    History::load(&path).unwrap_or_else(|error| {
+        eprintln!("webskiff: cannot read history {}: {error}", path.display());
+        History::default()
+    })
+}
+
 pub fn to_url(text: &str) -> std::io::Result<String> {
     if text.contains("://") || text.starts_with("about:") || text.starts_with("data:") || text.starts_with("file:") {
         return Ok(text.into());
@@ -1542,6 +1634,41 @@ fn local_file_url(text: &str) -> std::io::Result<Option<String>> {
 
 pub fn home() -> &'static str {
     HOME
+}
+
+fn display_char(c: char) -> char {
+    if c.is_control() { '?' } else { c }
+}
+
+fn clip(s: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut w = 0;
+    for c in s.chars().map(display_char) {
+        let cw = c.width().unwrap_or(0);
+        if w + cw > width {
+            if w < width {
+                out.push('…');
+            }
+            break;
+        }
+        w += cw;
+        out.push(c);
+    }
+    out
+}
+
+fn clip_start(s: &str, width: usize) -> String {
+    let mut out: Vec<char> = Vec::new();
+    let mut w = 1;
+    for c in s.chars().rev().map(display_char) {
+        let cw = c.width().unwrap_or(0);
+        if w + cw > width {
+            break;
+        }
+        w += cw;
+        out.push(c);
+    }
+    std::iter::once('…').chain(out.into_iter().rev()).collect()
 }
 
 #[cfg(test)]
@@ -1593,54 +1720,56 @@ mod tests {
 
     #[test]
     fn page_dialogs_cannot_write_terminal_controls() {
-        use super::{clip, clip_start, DialogType, Prompt, PromptKind, TextInput};
+        use super::{clip, clip_start, DialogType, Prompt, PromptKind};
         let payload = "\x1b]52;c;UFdORUQ=\x07\x1b[2J\r\n\t\u{009b}2J";
-        let prompt = Prompt {
-            kind: PromptKind::Dialog(1, DialogType::Prompt),
-            label: format!("prompt: {payload}: "),
-            input: TextInput::new(payload),
-            not_found: false,
-            keep_open: false,
-            hint: String::new(),
-        };
-        for text in [prompt.body(200), prompt.body(18), clip(payload, 200), clip_start(payload, 12)] {
+        let prompt = Prompt::new(PromptKind::Dialog(1, DialogType::Prompt), &format!("prompt: {payload}: "), payload);
+        for text in [prompt.body(200).0, prompt.body(18).0, clip(payload, 200), clip_start(payload, 12)] {
             assert!(!text.chars().any(char::is_control), "{text:?}");
         }
         assert_eq!(clip("Browser / café", 30), "Browser / café");
     }
-}
 
-fn display_char(c: char) -> char {
-    if c.is_control() { '?' } else { c }
-}
-
-fn clip(s: &str, width: usize) -> String {
-    let mut out = String::new();
-    let mut w = 0;
-    for c in s.chars().map(display_char) {
-        let cw = c.width().unwrap_or(0);
-        if w + cw > width {
-            if w < width {
-                out.push('…');
-            }
-            break;
+    fn two_pages() -> crate::history::History {
+        let mut history = crate::history::History::default();
+        history.visit("https://second.example/", 1_000);
+        for _ in 0..3 {
+            history.visit("https://first.example/", 1_000);
         }
-        w += cw;
-        out.push(c);
+        history
     }
-    out
-}
 
-fn clip_start(s: &str, width: usize) -> String {
-    let mut out: Vec<char> = Vec::new();
-    let mut w = 1;
-    for c in s.chars().rev().map(display_char) {
-        let cw = c.width().unwrap_or(0);
-        if w + cw > width {
-            break;
+    #[test]
+    fn open_prompts_complete_from_history_with_tab_and_shift_tab() {
+        use super::{Prompt, PromptKind};
+        let history = two_pages();
+        for kind in [PromptKind::Open, PromptKind::OpenTab] {
+            let mut prompt = Prompt::new(kind, "open: ", "EXAMPLE");
+            prompt.complete(&history, false, 1_000);
+            assert_eq!(prompt.input.text, "https://first.example/");
+            prompt.complete(&history, false, 1_000);
+            assert_eq!(prompt.input.text, "https://second.example/");
+            prompt.complete(&history, true, 1_000);
+            assert_eq!(prompt.input.text, "https://first.example/");
+            assert_eq!(prompt.input.cursor, prompt.input.text.len());
         }
-        w += cw;
-        out.push(c);
+        let mut find = Prompt::new(PromptKind::Find, "/", "example");
+        find.complete(&history, false, 1_000);
+        assert_eq!(find.input.text, "example");
     }
-    std::iter::once('…').chain(out.into_iter().rev()).collect()
+
+    #[test]
+    fn open_prompts_show_the_best_match_dim_after_the_cursor() {
+        use super::{Prompt, PromptKind};
+        let history = two_pages();
+        let mut prompt = Prompt::new(PromptKind::Open, "open: ", "https://fi");
+        prompt.suggest(&history, 1_000);
+        assert_eq!(prompt.body(200), (" open: https://fi█".to_string(), "rst.example/".to_string()));
+        assert_eq!(prompt.body(22).1, "rst.");
+        let mut other = Prompt::new(PromptKind::OpenTab, "new tab: ", "second");
+        other.suggest(&history, 1_000);
+        assert_eq!(other.body(200).1, "  → https://second.example/");
+        let mut find = Prompt::new(PromptKind::Find, "/", "https://fi");
+        find.suggest(&history, 1_000);
+        assert_eq!(find.body(200).1, "");
+    }
 }

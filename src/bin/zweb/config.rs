@@ -76,6 +76,8 @@ actions! {
     Delete => "delete", "Delete after the cursor";
     Clear => "clear", "Clear the prompt";
     DeleteWord => "delete_word", "Delete the word before the cursor";
+    Complete => "complete", "Complete the address from history (next match)";
+    CompletePrevious => "complete_previous", "Previous history match";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,6 +394,8 @@ fn allowed(scope: Scope, action: Action) -> bool {
                 | Delete
                 | Clear
                 | DeleteWord
+                | Complete
+                | CompletePrevious
         ),
         Scope::Insert => action == Cancel,
         Scope::Hint => matches!(action, Cancel | Backspace),
@@ -409,6 +413,8 @@ fn allowed(scope: Scope, action: Action) -> bool {
                 | Delete
                 | Clear
                 | DeleteWord
+                | Complete
+                | CompletePrevious
         ),
         Scope::Help => matches!(
             action,
@@ -449,6 +455,30 @@ mod tests {
             .help_lines()
             .iter()
             .any(|line| line.contains("Ctrl-F")));
+    }
+
+    #[test]
+    fn prompt_tab_and_shift_tab_complete_by_default() {
+        let config = Config::parse("").unwrap();
+        assert_eq!(
+            config.action(
+                Scope::Prompt,
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+            ),
+            Some(Action::Complete)
+        );
+        assert_eq!(
+            config.action(
+                Scope::Prompt,
+                KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)
+            ),
+            Some(Action::CompletePrevious)
+        );
+        assert_eq!(
+            action(&config, Scope::Prompt, "Enter"),
+            Some(Action::Accept)
+        );
+        assert!(Config::parse("[keys.browse]\ncomplete = ['c']").is_err());
     }
 
     #[test]

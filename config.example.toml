@@ -87,6 +87,8 @@ backspace = ["Backspace"]
 delete = ["Delete"]
 clear = ["Ctrl-U"]
 delete_word = ["Ctrl-W"]
+complete = ["Tab"]
+complete_previous = ["Shift-Tab"]
 
 [keys.hint]
 cancel = ["Esc"]

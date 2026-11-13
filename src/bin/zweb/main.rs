@@ -6,6 +6,7 @@
 mod app;
 mod cli;
 mod config;
+mod history;
 mod input;
 mod keys;
 mod render;

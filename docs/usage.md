@@ -17,6 +17,11 @@ a new tab. Addresses also accept existing local files, relative to the working
 directory, absolute paths, and `file://` URLs. Quote paths containing spaces.
 Missing explicit paths report an error.
 
+In the `o` and `t` prompts, the best match from your page history shows dim
+after the cursor. Tab replaces the text with the best match; Tab again shows the
+next match, and Shift-Tab the previous one. Matches contain every typed word in
+the address or title, ranked by how often and how recently you visited them.
+
 Arrow keys, Page Up/Down, Home/End, Alt-Left/Right, and F5 provide standard
 scrolling, history, and reload alongside the Vim keys.
 
@@ -69,6 +74,13 @@ Legacy paths are intentionally unchanged:
 | Keyboard configuration | `~/.config/webskiff/config.toml` |
 | Chromium profile, cookies, storage | `~/.cache/zweb/profile` |
 | Engine log | `~/.cache/zweb/zweb.log` |
+| Page history (http/https addresses and titles) | `~/.cache/zweb/history.tsv` |
+
+The history file is readable by your user only (mode 0600) and holds at most
+2000 pages. To delete it, quit Webskiff, then run `rm ~/.cache/zweb/history.tsv`.
+History saves run in the background. Failed writes are logged to `zweb.log`;
+they are retried only after a later history change or once on normal quit.
+Quit waits for pending writes and makes one final save attempt if needed.
 
 The profile is durable data despite its current cache location. Do not clear the
 whole cache directory to troubleshoot unless you intend to lose sign-ins.
