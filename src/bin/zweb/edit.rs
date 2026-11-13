@@ -54,10 +54,13 @@ pub fn run(path: &Path, original: &str, single_line: bool, enhanced: bool) -> Ed
     }
 }
 
-/// The edited text as the field takes it: one trailing newline dropped, and
-/// a one-line field's lines joined with spaces.
+/// The edited text as the field takes it: a trailing newline the editor
+/// added dropped, and a one-line field's lines joined with spaces.
 fn result(raw: &str, original: &str, single_line: bool) -> Edited {
-    let text = raw.strip_suffix('\n').unwrap_or(raw);
+    if raw == original {
+        return Edited::Unchanged;
+    }
+    let text = if original.ends_with('\n') { raw } else { raw.strip_suffix('\n').unwrap_or(raw) };
     let text = if single_line { text.replace('\n', " ") } else { text.to_string() };
     if text == original { Edited::Unchanged } else { Edited::Text(text) }
 }
