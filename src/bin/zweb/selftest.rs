@@ -28,6 +28,7 @@ const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:1
 <select id=s><option>one</option><option>two</option></select>
 <button id=w onclick="window.open('about:blank')">popup</button>
 <a id=k href=#k style="position:absolute;left:10px;top:210px">Known  Link</a>
+<a id=i href=#i style="position:absolute;left:10px;top:250px"> <img alt="Icon Label" width=16 height=16> </a>
 <a id=t1 href=#a onclick="window.followed=1;return false" style="position:absolute;top:2000px">find target</a>
 <a id=t2 href=#b onclick="window.followed=2;return false" style="position:absolute;top:2100px">other target</a>
 <p id=v style="position:absolute;top:300px">alpha bravo charlie</p>"#;
@@ -171,7 +172,7 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             Check::Js("document.title", "\"submitted:z\""),
         ),
         (
-            "hint script finds 5 targets with link text and its click works",
+            "hint script finds 6 targets with link text, icon link label and its click works",
             Box::new(|_, v| {
                 let page = v.clone();
                 v.evaluate(HINTS_JS, move |r| {
@@ -204,11 +205,18 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                         .find(|h| (h["y"].as_f64().unwrap_or(0.0) - 219.0).abs() < 10.0)
                         .and_then(|h| h["t"].as_str())
                         .unwrap_or("");
+                    // The icon link #i, at y 250..: whitespace only, so its image's alt.
+                    let icon = list
+                        .iter()
+                        .find(|h| h["href"].as_str().is_some_and(|u| u.ends_with("#i")))
+                        .and_then(|h| h["t"].as_str())
+                        .unwrap_or("");
+                    let text = format!("{text}|{icon}");
                     let count = if rendered { list.len() } else { 0 };
                     page.evaluate(
                         &format!(
                             "window.hintCount={count};window.hintText={}",
-                            serde_json::to_string(text).unwrap()
+                            serde_json::to_string(&text).unwrap()
                         ),
                         |_| {},
                     );
@@ -216,7 +224,7 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js(
                 "[window.hintCount, b.textContent, !!window.__zwebHop, window.hintText].join()",
-                "\"5,clicked,true,Known Link\"",
+                "\"6,clicked,true,Known Link|Icon Label\"",
             ),
         ),
         (
