@@ -3,6 +3,8 @@
 //! zweb [url] [--gfx kitty|shm|blocks] [--scale N]
 //! zweb --selftest      checks input, hints, popups, dialogs and frame cost headless
 
+#![allow(clippy::items_after_test_module)]
+
 /// A JS function: is the element a text field (editable)?
 macro_rules! editable {
     () => {

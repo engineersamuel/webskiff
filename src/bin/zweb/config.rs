@@ -207,10 +207,22 @@ struct ModeKeys {
 }
 
 impl ModeKeys {
-    fn add(&mut self, action: Action, label: &str, scope: Scope) -> Result<(), String> {
+    fn add(
+        &mut self,
+        action: Action,
+        label: &str,
+        scope: Scope,
+        leader: Stroke,
+    ) -> Result<(), String> {
         let keys: Vec<Stroke> = label
             .split_whitespace()
-            .map(Stroke::parse)
+            .map(|token| {
+                if token == "Leader" {
+                    Ok(leader)
+                } else {
+                    Stroke::parse(token)
+                }
+            })
             .collect::<Result<_, _>>()?;
         if keys.is_empty() || keys.len() > 2 || (keys.len() == 2 && scope != Scope::Browse) {
             return Err(format!(
@@ -243,6 +255,7 @@ impl ModeKeys {
 
 #[derive(Debug)]
 pub struct Config {
+    leader: String,
     modes: [ModeKeys; 7],
 }
 
@@ -276,18 +289,20 @@ impl Config {
     }
 
     pub(crate) fn parse(overrides: &str) -> Result<Self, String> {
-        let defaults = DEFAULTS.parse::<toml::Table>().map_err(|e| e.to_string())?;
+        let defaults = DEFAULTS.parse::<toml::Table>().expect("valid defaults");
         let user = overrides
             .parse::<toml::Table>()
             .map_err(|e| e.to_string())?;
         validate_tables(&user)?;
+        let (leader, leader_stroke) = parse_leader(&defaults, &user)?;
         let mut config = Self {
+            leader,
             modes: std::array::from_fn(|_| ModeKeys::default()),
         };
         for &(scope, name) in SCOPES {
             let mut table = defaults["keys"][name]
                 .as_table()
-                .ok_or("invalid embedded defaults")?
+                .expect("mode table")
                 .clone();
             if let Some(custom) = user.get("keys").and_then(|keys| keys.get(name)) {
                 let custom = custom
@@ -295,7 +310,7 @@ impl Config {
                     .ok_or_else(|| format!("keys.{name} must be a table"))?;
                 table.extend(custom.clone());
             }
-            config.compile_mode(scope, name, &table)?;
+            config.compile_mode(scope, name, &table, leader_stroke)?;
         }
         Ok(config)
     }
@@ -305,6 +320,7 @@ impl Config {
         scope: Scope,
         name: &str,
         table: &toml::Table,
+        leader: Stroke,
     ) -> Result<(), String> {
         let mode = &mut self.modes[scope as usize];
         for (command, value) in table {
@@ -323,7 +339,7 @@ impl Config {
                 let key = value
                     .as_str()
                     .ok_or_else(|| format!("keys.{name}.{command} contains a non-string key"))?;
-                mode.add(action, key, scope)
+                mode.add(action, key, scope, leader)
                     .map_err(|e| format!("keys.{name}.{command}: {e}"))?;
             }
         }
@@ -368,6 +384,7 @@ impl Config {
         let mut lines = vec![
             "Webskiff keyboard help - configured bindings".into(),
             "Config: ~/.config/webskiff/config.toml (missing entries use repo defaults)".into(),
+            format!("Leader: {}", self.leader),
             format!(
                 "Help: {} scroll; {} page; {} close",
                 self.labels(Scope::Help, Action::ScrollDown),
@@ -399,8 +416,21 @@ impl Config {
     }
 }
 
+fn parse_leader(defaults: &toml::Table, user: &toml::Table) -> Result<(String, Stroke), String> {
+    let value = user.get("leader").unwrap_or(&defaults["leader"]);
+    let label = value.as_str().ok_or("leader must be a single key string")?;
+    if label.split_whitespace().count() != 1 {
+        return Err(format!("leader must be a single key stroke, got {label:?}"));
+    }
+    let stroke = Stroke::parse(label).map_err(|e| format!("leader: {e}"))?;
+    Ok((label.into(), stroke))
+}
+
 fn validate_tables(user: &toml::Table) -> Result<(), String> {
-    if let Some(name) = user.keys().find(|key| key.as_str() != "keys") {
+    if let Some(name) = user
+        .keys()
+        .find(|key| !matches!(key.as_str(), "keys" | "leader"))
+    {
         return Err(format!(
             "unknown config section {name:?}; expected [keys.MODE]"
         ));
@@ -489,10 +519,7 @@ mod tests {
 
     fn action(config: &Config, scope: Scope, key: &str) -> Option<Action> {
         let Stroke(code, modifiers) = Stroke::parse(key).unwrap();
-        match config.resolve(scope, KeyEvent::new(code, modifiers), None) {
-            Binding::Action(action) => Some(action),
-            _ => None,
-        }
+        config.action(scope, KeyEvent::new(code, modifiers))
     }
 
     #[test]
