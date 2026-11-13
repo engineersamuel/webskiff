@@ -289,7 +289,7 @@ impl Config {
     }
 
     pub(crate) fn parse(overrides: &str) -> Result<Self, String> {
-        let defaults = DEFAULTS.parse::<toml::Table>().expect("valid defaults");
+        let defaults = DEFAULTS.parse::<toml::Table>().map_err(|e| e.to_string())?;
         let user = overrides
             .parse::<toml::Table>()
             .map_err(|e| e.to_string())?;
@@ -302,7 +302,7 @@ impl Config {
         for &(scope, name) in SCOPES {
             let mut table = defaults["keys"][name]
                 .as_table()
-                .expect("mode table")
+                .ok_or("invalid embedded defaults")?
                 .clone();
             if let Some(custom) = user.get("keys").and_then(|keys| keys.get(name)) {
                 let custom = custom
@@ -419,11 +419,12 @@ impl Config {
 fn parse_leader(defaults: &toml::Table, user: &toml::Table) -> Result<(String, Stroke), String> {
     let value = user.get("leader").unwrap_or(&defaults["leader"]);
     let label = value.as_str().ok_or("leader must be a single key string")?;
-    if label.split_whitespace().count() != 1 {
+    let mut tokens = label.split_whitespace();
+    let Some(token) = tokens.next().filter(|_| tokens.next().is_none()) else {
         return Err(format!("leader must be a single key stroke, got {label:?}"));
-    }
-    let stroke = Stroke::parse(label).map_err(|e| format!("leader: {e}"))?;
-    Ok((label.into(), stroke))
+    };
+    let stroke = Stroke::parse(token).map_err(|e| format!("leader: {e}"))?;
+    Ok((token.into(), stroke))
 }
 
 fn validate_tables(user: &toml::Table) -> Result<(), String> {
@@ -432,7 +433,7 @@ fn validate_tables(user: &toml::Table) -> Result<(), String> {
         .find(|key| !matches!(key.as_str(), "keys" | "leader"))
     {
         return Err(format!(
-            "unknown config section {name:?}; expected [keys.MODE]"
+            "unknown config section {name:?}; expected leader or [keys.MODE]"
         ));
     }
     if let Some(keys) = user.get("keys") {
@@ -857,8 +858,7 @@ mod tests {
 
     #[test]
     fn custom_leader_trims_whitespace_and_stores_normalized_label() {
-        let config =
-            Config::parse("leader = ' ; '\n[keys.browse]\nreload = ['Leader r']").unwrap();
+        let config = Config::parse("leader = ' ; '\n[keys.browse]\nreload = ['Leader r']").unwrap();
         let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(';')), None) {
             Binding::Prefix(prefix) => prefix,
             _ => panic!("expected ';' to be a prefix"),
@@ -871,10 +871,7 @@ mod tests {
             ),
             Binding::Action(Action::Reload)
         ));
-        assert!(config
-            .help_lines()
-            .iter()
-            .any(|line| line == "Leader: ;"));
+        assert!(config.help_lines().iter().any(|line| line == "Leader: ;"));
     }
 
     #[test]
