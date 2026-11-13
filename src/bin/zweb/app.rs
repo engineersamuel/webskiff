@@ -26,6 +26,12 @@ use crate::render::{Hop, Layout, Renderer};
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
 const EDITABLE_JS: &str = concat!(editable!(), "(document.activeElement)");
+/// Defines `__zwebCaret` (caret.js) and starts a one-character selection; `false` if no text is visible.
+pub const VISUAL_START_JS: &str = concat!(include_str!("caret.js"), ";__zwebCaret.start()");
+/// The selection's text; the selection collapses.
+pub const YANK_JS: &str = "__zwebCaret.text()";
+/// Largest OSC 52 payload a yank writes, in base64 bytes.
+const YANK_MAX: usize = 100_000;
 const HOME: &str = "https://duckduckgo.com/";
 /// Cell rows per scroll step (j, k, the wheel).
 const STEP_ROWS: f32 = 3.0;
@@ -56,6 +62,9 @@ pub enum Msg {
     EditDone { tab: u64, path: PathBuf, edited: Edited },
     /// The edited text went back into the field, or the field was gone.
     EditWritten { path: PathBuf, ok: bool },
+    /// `__zwebCaret.start()` found text to select.
+    VisualStarted { tab: u64, ok: bool },
+    Yanked { tab: u64, text: Option<String> },
     Extents { tab: u64, json: Option<String> },
     /// Read the page for hints ahead, if nothing happened since `gen`.
     Prepare { gen: u64 },
@@ -94,6 +103,7 @@ enum Mode {
     Browse,
     Insert,
     Hint,
+    Visual,
 }
 
 #[derive(Clone, PartialEq)]
@@ -366,10 +376,7 @@ impl App {
         }
         self.renderer.clear_all();
         // The hint overlay was removed with every image, and its places are old.
-        if self.mode == Mode::Hint {
-            self.mode = Mode::Browse;
-            self.clear_hints();
-        }
+        self.leave_hint_or_visual();
         if let Some(t) = self.tabs.get(self.active) {
             t.view.request_frame();
         }
@@ -523,6 +530,8 @@ impl App {
             Msg::EditText { tab, json } => self.edit_text(tab, json),
             Msg::EditDone { tab, path, edited } => self.edit_done(tab, path, edited),
             Msg::EditWritten { path, ok } => self.edit_written(path, ok),
+            Msg::VisualStarted { tab, ok } => self.visual_started(tab, ok),
+            Msg::Yanked { tab, text } => self.yanked(tab, text),
             Msg::Tick => self.tick(),
         }
     }
@@ -588,8 +597,10 @@ impl App {
         }
         if i == self.active {
             if self.mode == Mode::Hint {
-                self.mode = Mode::Browse;
                 self.renderer.hop(None);
+            }
+            if matches!(self.mode, Mode::Hint | Mode::Visual) {
+                self.mode = Mode::Browse;
             }
             self.renderer.forget();
             self.extents = None;
@@ -844,6 +855,7 @@ impl App {
                 }
             }
             Mode::Hint => self.hint_key(k),
+            Mode::Visual => self.visual_key(k),
             Mode::Browse => self.command(k),
         }
     }
@@ -993,6 +1005,7 @@ impl App {
             Action::Hints => self.start_hints(false),
             Action::HintsNewTab => self.start_hints(true),
             Action::CopyUrl => self.copy_url(),
+            Action::Visual => self.start_visual(),
             Action::ToggleImages => self.toggle_placeholders(),
             _ => return false,
         }
@@ -1025,8 +1038,7 @@ impl App {
 
     fn copy_url(&mut self) {
         let url = self.tab().url.clone();
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&url);
-        self.renderer.write(format!("\x1b]52;c;{b64}\x07").as_bytes());
+        self.renderer.write(&osc52(&url));
         self.message = format!("copied {url}");
     }
 
@@ -1050,9 +1062,8 @@ impl App {
     /// A wheel event; a small vertical step of the page is shown at once
     /// from the rows the terminal holds (render.rs, `predict`).
     fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32, mods: Modifiers) {
-        if self.mode == Mode::Hint {
-            self.mode = Mode::Browse;
-            self.clear_hints();
+        if matches!(self.mode, Mode::Hint | Mode::Visual) {
+            self.leave_hint_or_visual();
             self.draw();
         }
         if dx == 0.0 {
@@ -1130,10 +1141,7 @@ impl App {
         if self.prompt.is_some() {
             self.prompt_done(false);
         }
-        if self.mode == Mode::Hint {
-            self.mode = Mode::Browse;
-            self.clear_hints();
-        }
+        self.leave_hint_or_visual();
     }
 
     fn start_find(&mut self, keep_open: bool) {
@@ -1291,6 +1299,73 @@ impl App {
         self.draw();
     }
 
+    /// Ends Hint or Visual mode, as a scroll, click, resize or tab switch does.
+    fn leave_hint_or_visual(&mut self) {
+        match self.mode {
+            Mode::Hint => self.clear_hints(),
+            Mode::Visual => {}
+            _ => return,
+        }
+        self.mode = Mode::Browse;
+    }
+
+    // ---- Visual ----
+
+    fn start_visual(&mut self) {
+        let tab = self.tab().id;
+        self.view().evaluate(VISUAL_START_JS, move |r| send(Msg::VisualStarted { tab, ok: r.as_deref() == Ok("true") }));
+    }
+
+    fn visual_started(&mut self, tab: u64, ok: bool) {
+        if self.index_of(tab) != Some(self.active) || self.mode != Mode::Browse || self.prompt.is_some() || self.help {
+            return;
+        }
+        if ok {
+            self.mode = Mode::Visual;
+        } else {
+            self.message = "no text here".into();
+        }
+        self.draw();
+    }
+
+    fn visual_key(&mut self, k: KeyEvent) {
+        match self.bindings.action(Scope::Visual, k) {
+            Some(Action::Cancel) => self.view().evaluate("window.__zwebCaret?.collapse()", |_| {}),
+            Some(Action::Yank) => {
+                let tab = self.tab().id;
+                self.view().evaluate(YANK_JS, move |r| {
+                    send(Msg::Yanked { tab, text: r.ok().and_then(|j| serde_json::from_str(&j).ok()) })
+                });
+            }
+            // Fire and forget: the selection's paint comes as a frame.
+            Some(action) => {
+                if let Some(js) = visual_script(action) {
+                    self.view().evaluate(&js, |_| {});
+                }
+                return;
+            }
+            None => return,
+        }
+        self.mode = Mode::Browse;
+        self.draw();
+    }
+
+    fn yanked(&mut self, tab: u64, text: Option<String>) {
+        if self.index_of(tab) != Some(self.active) {
+            return;
+        }
+        let Some(text) = text else {
+            self.message = "cannot read the selection".into();
+            return self.draw();
+        };
+        let (bytes, message) = yank(&text);
+        if let Some(bytes) = bytes {
+            self.renderer.write(&bytes);
+        }
+        self.message = message;
+        self.draw();
+    }
+
     // ---- Mouse ----
 
     fn click(&mut self, x: f32, y: f32, count: u32) {
@@ -1352,10 +1427,7 @@ impl App {
     }
 
     fn mouse_down(&mut self, view: &View, x: f32, y: f32, button: MouseButton, mods: Modifiers) {
-        if self.mode == Mode::Hint {
-            self.mode = Mode::Browse;
-            self.clear_hints();
-        }
+        self.leave_hint_or_visual();
         let (at, lx, ly, n) = self.last_click;
         let count = if at.elapsed() < Duration::from_millis(400) && (lx - x).abs() < 4.0 && (ly - y).abs() < 4.0 {
             n + 1
@@ -1593,6 +1665,7 @@ impl App {
             (_, Mode::Browse) => (" BROWSE ", Color::Blue),
             (_, Mode::Insert) => (" INSERT ", Color::Green),
             (_, Mode::Hint) => (" HINT ", Color::Yellow),
+            (_, Mode::Visual) => (" VISUAL ", Color::Magenta),
         }
     }
 
@@ -1606,10 +1679,7 @@ impl App {
     }
 
     fn show_help(&mut self) {
-        if self.mode == Mode::Hint {
-            self.mode = Mode::Browse;
-            self.clear_hints();
-        }
+        self.leave_hint_or_visual();
         self.help = true;
         self.help_offset = 0;
         self.pending_key = None;
@@ -1707,6 +1777,38 @@ fn local_file_url(text: &str) -> std::io::Result<Option<String>> {
         })
         .collect();
     Ok(Some(format!("file://{encoded}")))
+}
+
+/// The page script for a Visual-mode move: extend the selection, then scroll
+/// only if its end left the viewport.
+pub fn visual_script(action: Action) -> Option<String> {
+    let (dir, unit) = match action {
+        Action::CharBackward => ("backward", "character"),
+        Action::CharForward => ("forward", "character"),
+        Action::LineForward => ("forward", "line"),
+        Action::LineBackward => ("backward", "line"),
+        Action::WordForward => ("forward", "word"),
+        Action::WordBackward => ("backward", "word"),
+        Action::LineStart => ("backward", "lineboundary"),
+        Action::LineEnd => ("forward", "lineboundary"),
+        _ => return None,
+    };
+    Some(format!("getSelection().modify('extend','{dir}','{unit}');__zwebCaret.reveal()"))
+}
+
+/// The terminal sequence that puts `text` on the clipboard.
+fn osc52(text: &str) -> Vec<u8> {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text);
+    format!("\x1b]52;c;{b64}\x07").into_bytes()
+}
+
+/// A yank's clipboard bytes, none if too large, and its status message.
+pub fn yank(text: &str) -> (Option<Vec<u8>>, String) {
+    let encoded = text.len().div_ceil(3) * 4;
+    if encoded > YANK_MAX {
+        return (None, format!("selection too large to copy ({encoded} bytes base64, max {YANK_MAX})"));
+    }
+    (Some(osc52(text)), format!("copied {} chars", text.chars().count()))
 }
 
 pub fn home() -> &'static str {

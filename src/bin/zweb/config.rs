@@ -79,6 +79,16 @@ actions! {
     DeleteWord => "delete_word", "Delete the word before the cursor";
     Complete => "complete", "Complete the address from history (next match)";
     CompletePrevious => "complete_previous", "Previous history match";
+    Visual => "visual", "Select page text with the keyboard";
+    CharBackward => "char_backward", "Extend the selection one character back";
+    CharForward => "char_forward", "Extend the selection one character forward";
+    LineForward => "line_forward", "Extend the selection one line down";
+    LineBackward => "line_backward", "Extend the selection one line up";
+    WordForward => "word_forward", "Extend the selection one word forward";
+    WordBackward => "word_backward", "Extend the selection one word back";
+    LineStart => "line_start", "Extend the selection to the line start";
+    LineEnd => "line_end", "Extend the selection to the line end";
+    Yank => "yank", "Copy the selection and leave this mode";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +99,7 @@ pub enum Scope {
     Prompt,
     Hint,
     Help,
+    Visual,
 }
 
 const SCOPES: &[(Scope, &str)] = &[
@@ -98,6 +109,7 @@ const SCOPES: &[(Scope, &str)] = &[
     (Scope::Prompt, "prompt"),
     (Scope::Hint, "hint"),
     (Scope::Help, "help"),
+    (Scope::Visual, "visual"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -224,7 +236,7 @@ impl ModeKeys {
 
 #[derive(Debug)]
 pub struct Config {
-    modes: [ModeKeys; 6],
+    modes: [ModeKeys; 7],
 }
 
 pub enum Binding {
@@ -249,7 +261,7 @@ impl Config {
         }
     }
 
-    fn parse(overrides: &str) -> Result<Self, String> {
+    pub(crate) fn parse(overrides: &str) -> Result<Self, String> {
         let defaults = DEFAULTS.parse::<toml::Table>().map_err(|e| e.to_string())?;
         let user = overrides
             .parse::<toml::Table>()
@@ -397,6 +409,15 @@ fn allowed(scope: Scope, action: Action) -> bool {
                 | DeleteWord
                 | Complete
                 | CompletePrevious
+                | CharBackward
+                | CharForward
+                | LineForward
+                | LineBackward
+                | WordForward
+                | WordBackward
+                | LineStart
+                | LineEnd
+                | Yank
         ),
         Scope::Insert => action == Cancel,
         Scope::Hint => matches!(action, Cancel | Backspace),
@@ -420,6 +441,19 @@ fn allowed(scope: Scope, action: Action) -> bool {
         Scope::Help => matches!(
             action,
             Cancel | ScrollDown | ScrollUp | PageDown | PageUp | Top | Bottom
+        ),
+        Scope::Visual => matches!(
+            action,
+            Cancel
+                | CharBackward
+                | CharForward
+                | LineForward
+                | LineBackward
+                | WordForward
+                | WordBackward
+                | LineStart
+                | LineEnd
+                | Yank
         ),
     }
 }
