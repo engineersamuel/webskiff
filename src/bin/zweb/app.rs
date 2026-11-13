@@ -30,7 +30,6 @@ use crate::render::{Hop, Layout, Renderer};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
-pub const PAGINATE_JS: &str = include_str!("paginate.js");
 const EDITABLE_JS: &str = concat!(editable!(), "(document.activeElement)");
 /// Defines `__zwebCaret` (caret.js) and starts a one-character selection; `false` if no text is visible.
 pub const VISUAL_START_JS: &str = concat!(include_str!("caret.js"), ";__zwebCaret.start()");
@@ -132,8 +131,6 @@ pub enum Msg {
         tab: u64,
         json: Option<String>,
     },
-    /// The next/previous page link (paginate.js), if any.
-    PageLink { tab: u64, url: Option<String> },
     /// Read the page for hints ahead, if nothing happened since `gen`.
     Prepare {
         gen: u64,
@@ -919,7 +916,6 @@ impl App {
             Msg::EditWritten { path, ok } => self.edit_written(path, ok),
             Msg::VisualStarted { session, ok } => self.visual_started(session, ok),
             Msg::Yanked { tab, text } => self.yanked(tab, text),
-            Msg::PageLink { tab, url } => self.page_link(tab, url),
             Msg::Tick => self.tick(),
         }
     }
@@ -1396,8 +1392,6 @@ impl App {
             Action::Stop => self.view().stop(),
             Action::UrlUp => self.go_url(url_up(&self.tab().url), "already at the top of this address"),
             Action::UrlRoot => self.go_url(url_root(&self.tab().url), "already at the root of this address"),
-            Action::NextPage => self.find_page_link(true),
-            Action::PreviousPage => self.find_page_link(false),
             _ => return false,
         }
         true
@@ -1413,22 +1407,6 @@ impl App {
     fn load_here(&mut self, url: String) {
         self.tab().view.load_url(&url);
         self.tabs[self.active].url = url;
-    }
-
-    fn find_page_link(&self, next: bool) {
-        let tab = self.tab().id;
-        self.view().evaluate(&format!("{PAGINATE_JS}({next})"), move |r| {
-            let url = r.ok().and_then(|j| serde_json::from_str::<Option<String>>(&j).ok()).flatten();
-            send(Msg::PageLink { tab, url });
-        });
-    }
-
-    fn page_link(&mut self, tab: u64, url: Option<String>) {
-        if self.index_of(tab) != Some(self.active) {
-            return;
-        }
-        self.go_url(url, "no next/previous page link found");
-        self.draw();
     }
 
     fn tab_command(&mut self, action: Action) -> bool {
