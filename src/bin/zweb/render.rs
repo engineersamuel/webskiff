@@ -65,6 +65,9 @@ struct Pending {
     clear_popup: bool,
     /// Page rows to leave to text at the bottom (the prefix popup), or Some(0).
     cover: Option<u16>,
+    /// The most rows any cover in this batch left to text: its text is
+    /// queued too, so those rows are covered first, then given back.
+    cover_peak: u16,
     /// With cover Some(0): the next page frame places the uncovered rows.
     uncover_by_frame: bool,
     /// The hint overlay to show, or Some(None) to remove it.
@@ -815,6 +818,7 @@ impl Renderer {
     pub fn cover(&self, rows: u16) {
         let mut p = self.pending.lock().unwrap();
         p.cover = Some(rows);
+        p.cover_peak = p.cover_peak.max(rows);
         p.uncover_by_frame = false;
         self.wake.notify_one();
     }
@@ -924,14 +928,22 @@ impl Renderer {
         }
     }
 
+    fn apply_cover(&self, pending: &Pending, layout: &Layout, rows: &mut Rows, out: &mut Vec<u8>) {
+        let kitty = self.gfx != Gfx::Blocks;
+        if pending.cover_peak > rows.cover {
+            rows.set_cover(out, layout, pending.cover_peak, kitty);
+        }
+        match pending.cover {
+            Some(0) if pending.uncover_by_frame && rows.cover > 0 => rows.uncover_at = Some(Instant::now() + UNCOVER_WAIT),
+            Some(n) => rows.set_cover(out, layout, n, kitty),
+            None => {}
+        }
+    }
+
     fn write_pending(&self, pending: &Pending, layout: &Layout, rows: &mut Rows) {
         let mut out = Vec::new();
         self.clear_pending(pending, rows, &mut out);
-        match pending.cover {
-            Some(0) if pending.uncover_by_frame && rows.cover > 0 => rows.uncover_at = Some(Instant::now() + UNCOVER_WAIT),
-            Some(n) => rows.set_cover(&mut out, layout, n, self.gfx != Gfx::Blocks),
-            None => {}
-        }
+        self.apply_cover(pending, layout, rows, &mut out);
         out.extend_from_slice(&pending.text);
         if pending.predict != 0 && self.gfx != Gfx::Blocks {
             self.show_prediction(&mut out, layout, rows, pending.predict);
@@ -1804,6 +1816,20 @@ mod tests {
             "\x1b[4;1H\x1b_Ga=p,i=13,p=4,c=16,r=1,C=1,q=2\x1b\\",
             "\x1b[5;1H\x1b_Ga=p,i=15,p=5,c=16,r=1,C=1,q=2\x1b\\",
         ).as_bytes());
+    }
+
+    #[test]
+    fn blocks_popup_opened_and_closed_in_one_batch_redraws_its_rows() {
+        let renderer = Renderer::new(Gfx::Blocks);
+        let (layout, mut rows) = five_cached_rows();
+        renderer.cover(2);
+        renderer.write(b"popup");
+        renderer.cover(0);
+        let (_, pending) = renderer.wait_pending(&rows);
+        let mut out = Vec::new();
+        renderer.apply_cover(&pending, &layout, &mut rows, &mut out);
+        assert_eq!(rows.cover, 0);
+        assert_eq!(rows.shown, vec![Some(10), Some(11), Some(12), None, None]);
     }
 
     #[test]
