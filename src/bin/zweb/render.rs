@@ -1688,6 +1688,46 @@ mod tests {
         );
     }
 
+    /// Five cached rows on screen, one tile each.
+    fn five_cached_rows() -> (Layout, Rows) {
+        let layout = Layout { rows: 5, cols: 16, ..Layout::default() };
+        let mut rows = Rows::new();
+        rows.shown = (10..15).map(Some).collect();
+        rows.fixed = vec![false; 5];
+        for id in 10..16 {
+            rows.cache.insert(id as u64, Cached { id, used: 0, size: 3, src: String::new() });
+        }
+        (layout, rows)
+    }
+
+    #[test]
+    fn uncover_places_the_covered_tiles_again_from_the_cache() {
+        let (layout, mut rows) = five_cached_rows();
+        let before = rows.shown.clone();
+        let mut out = Vec::new();
+        rows.set_cover(&mut out, &layout, 0, true);
+        assert!(out.is_empty(), "no popup, no output");
+        rows.set_cover(&mut out, &layout, 2, true);
+        assert_eq!(out, b"\x1b_Ga=d,d=i,i=13,p=4,q=2\x1b\\\x1b_Ga=d,d=i,i=14,p=5,q=2\x1b\\");
+        out.clear();
+        rows.set_cover(&mut out, &layout, 0, true);
+        assert_eq!(rows.shown, before);
+        assert_eq!(out, b"\x1b[4;1H\x1b_Ga=p,i=13,p=4,c=16,r=1,C=1,q=2\x1b\\\x1b[5;1H\x1b_Ga=p,i=14,p=5,c=16,r=1,C=1,q=2\x1b\\");
+    }
+
+    #[test]
+    fn prediction_starts_right_after_uncover() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let (layout, mut rows) = five_cached_rows();
+        let mut out = Vec::new();
+        rows.set_cover(&mut out, &layout, 2, true);
+        rows.set_cover(&mut out, &layout, 0, true);
+        out.clear();
+        renderer.show_prediction(&mut out, &layout, &mut rows, 1);
+        assert!(rows.prediction.is_some());
+        assert_eq!(rows.shown, vec![Some(11), Some(12), Some(13), Some(14), Some(BLANK)]);
+    }
+
     #[test]
     fn prediction_scores_partial_steps_and_recovers_after_hidden_hits() {
         let renderer = Renderer::new(Gfx::KittyDirect);
