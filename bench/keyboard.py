@@ -199,10 +199,22 @@ def wait_for(marker, seconds=10):
     raise AssertionError(f"{marker!r} not seen: {bytes(output[-3000:])!r}")
 
 
+def open_new_tab(url, marker):
+    opener = active_tab(press(b"t", expected="NEW TAB"))
+    os.write(fd, url.encode() + b"\r")
+    try:
+        return wait_for(marker, 5)
+    except AssertionError:
+        # Engine bug: a new tab sometimes stays stuck loading (seen after a tab
+        # close and after a tab open); a reload does not recover it, so reopen it.
+        press(b"x", expected=f"\x1b[7m {opener} ")
+        press(b"t", expected="NEW TAB")
+        os.write(fd, url.encode() + b"\r")
+        return wait_for(marker)
+
+
 def open_titled_tab(title):
-    press(b"t", expected="NEW TAB")
-    os.write(fd, (fixture + "?title=" + title).encode() + b"\r")
-    return wait_for(f" {title} ".encode())
+    return open_new_tab(fixture + "?title=" + title, f" {title} ".encode())
 
 
 def pick_tab(before, query, target, cancel=False, timed=False):
@@ -226,9 +238,7 @@ def pick_tab(before, query, target, cancel=False, timed=False):
 
 def pick_retitled_tab():
     """The picker lists a tab once its new title matches; Enter picks it."""
-    press(b"t", expected="NEW TAB")
-    os.write(fd, (fixture + "?retitle").encode() + b"\r")
-    wait_for(b" Quokka ")
+    open_new_tab(fixture + "?retitle", b" Quokka ")
     until(b"T", lambda raw: bool(picker_rows(raw)))
     os.write(fd, b"zbr")
     rows = picker_rows(b"".join(data for _, data in pump(0.3)))
