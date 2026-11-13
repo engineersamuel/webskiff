@@ -316,4 +316,36 @@ mod tests {
         assert_eq!(jumps.forward(), None);
         assert_eq!(jumps.back(tab.current()), Some(jump(1, "a")));
     }
+
+    #[test]
+    fn cancelled_jump_does_not_suppress_later_navigation() {
+        let mut jumps = Jumps::default();
+        jumps.record(jump(1, "a"));
+        jumps.record(jump(1, "b"));
+        let mut tab = super::TabNav::new(1, "b".into());
+        let target = jumps.back(tab.current()).unwrap();
+        assert_eq!(tab.jump_to(&target.url), super::NavOp::Load("a".into()));
+
+        // Failed loads and Stop both cancel the per-tab restoration.
+        tab.clear_pending();
+        assert_eq!(tab.current(), jump(1, "b"));
+        assert!(tab.commit("a".into(), &mut jumps));
+        assert_eq!(jumps.forward(), None);
+        assert_eq!(jumps.back(tab.current()), None);
+    }
+
+    #[test]
+    fn background_commit_preserves_forward_jump() {
+        let mut jumps = Jumps::default();
+        jumps.record(jump(1, "a"));
+        let mut background = super::TabNav::new(2, "b".into());
+        jumps.record(background.current());
+        assert_eq!(jumps.back(background.current()), Some(jump(1, "a")));
+
+        // Tab 1 is active when the slow second tab finally commits.
+        assert!(background.commit("redirected-b".into(), &mut jumps));
+        assert_eq!(background.current(), jump(2, "redirected-b"));
+        assert_eq!(jumps.forward(), Some(jump(2, "b")));
+        assert_eq!(jumps.back(jump(2, "b")), Some(jump(1, "a")));
+    }
 }
