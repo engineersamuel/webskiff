@@ -8,6 +8,85 @@ pub struct Jump {
     pub url: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NavOp {
+    None,
+    Load(String),
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingJump {
+    Restoring(String),
+    Superseded(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabNav {
+    pub id: u64,
+    pub url: String,
+    pending: Option<PendingJump>,
+}
+
+impl TabNav {
+    pub fn new(id: u64, url: String) -> Self {
+        Self {
+            id,
+            url,
+            pending: None,
+        }
+    }
+
+    pub fn current(&self) -> Jump {
+        let url = match &self.pending {
+            Some(PendingJump::Restoring(u)) => u.clone(),
+            _ => self.url.clone(),
+        };
+        Jump { tab: self.id, url }
+    }
+
+    pub fn open(&mut self, url: String) {
+        self.url = url;
+        self.pending = None;
+    }
+
+    pub fn clear_pending(&mut self) {
+        self.pending = None;
+    }
+
+    pub fn jump_to(&mut self, url: &str) -> NavOp {
+        if self.url == url {
+            if let Some(PendingJump::Restoring(old)) = self.pending.take() {
+                self.pending = Some(PendingJump::Superseded(old));
+                return NavOp::Stop;
+            }
+            NavOp::None
+        } else {
+            self.pending = Some(PendingJump::Restoring(url.into()));
+            NavOp::Load(url.into())
+        }
+    }
+
+    pub fn commit(&mut self, url: String, jumps: &mut Jumps) -> bool {
+        match self.pending.take() {
+            Some(PendingJump::Superseded(stale)) if stale == url => return false,
+            Some(PendingJump::Restoring(want)) if want == url => {
+                self.url = url;
+            }
+            _ => {
+                self.url = url;
+                if !self.url.is_empty() {
+                    jumps.record(Jump {
+                        tab: self.id,
+                        url: self.url.clone(),
+                    });
+                }
+            }
+        }
+        true
+    }
+}
+
 /// `at == list.len()` while not walking; otherwise `list[at]` is where we are.
 #[derive(Debug, Default)]
 pub struct Jumps {
@@ -52,10 +131,10 @@ impl Jumps {
         let mut at = 0;
         let mut kept: Vec<Jump> = Vec::with_capacity(self.list.len());
         for (i, jump) in std::mem::take(&mut self.list).into_iter().enumerate() {
-            if i == self.at {
-                at = kept.len();
-            }
             if jump.tab != tab && kept.last() != Some(&jump) {
+                if i < self.at {
+                    at += 1;
+                }
                 kept.push(jump);
             }
         }
@@ -152,14 +231,23 @@ mod tests {
             jumps.record(j);
         }
         assert_eq!(jumps.back(jump(3, "z")), Some(jump(2, "y")));
+        assert_eq!(jumps.back(jump(2, "y")), Some(jump(1, "b")));
         jumps.remove_tab(2);
-        assert_eq!(
-            walked(&mut jumps, jump(3, "z")),
-            [jump(1, "b"), jump(1, "a")]
-        );
+        assert_eq!(jumps.back(jump(1, "b")), Some(jump(1, "a")));
+        assert_eq!(jumps.back(jump(1, "a")), None);
         assert_eq!(jumps.forward(), Some(jump(1, "b")));
         assert_eq!(jumps.forward(), Some(jump(3, "z")));
         assert_eq!(jumps.forward(), None);
+
+        let mut trailing = Jumps::default();
+        for j in [jump(1, "a"), jump(2, "x")] {
+            trailing.record(j);
+        }
+        assert_eq!(trailing.back(jump(2, "x")), Some(jump(1, "a")));
+        assert_eq!(trailing.forward(), Some(jump(2, "x")));
+        trailing.remove_tab(2);
+        assert_eq!(trailing.forward(), None);
+        assert_eq!(trailing.back(jump(1, "a")), None);
     }
 
     #[test]
@@ -184,5 +272,48 @@ mod tests {
         assert_eq!(earlier.len(), CAP - 1);
         assert_eq!(earlier.first(), Some(&jump(1, &(CAP + 48).to_string())));
         assert_eq!(earlier.last(), Some(&jump(1, "50")));
+    }
+
+    #[test]
+    fn superseding_in_flight_jump_back_to_committed_url_stops_pending_load_and_ignores_stale_commit(
+    ) {
+        let mut jumps = Jumps::default();
+        jumps.record(jump(1, "a"));
+        jumps.record(jump(1, "b"));
+        let mut tab = super::TabNav::new(1, "b".into());
+        let target_a = jumps.back(tab.current()).unwrap();
+        assert_eq!(tab.jump_to(&target_a.url), super::NavOp::Load("a".into()));
+        let target_b = jumps.forward().unwrap();
+        assert_eq!(tab.jump_to(&target_b.url), super::NavOp::Stop);
+        assert!(!tab.commit("a".into(), &mut jumps));
+        assert_eq!(tab.url, "b");
+        assert_eq!(jumps.back(tab.current()), Some(jump(1, "a")));
+    }
+
+    #[test]
+    fn jump_commit_is_not_recorded_as_a_new_jump_but_user_navigation_is() {
+        let mut jumps = Jumps::default();
+        jumps.record(jump(1, "a"));
+        jumps.record(jump(1, "b"));
+        let mut tab = super::TabNav::new(1, "b".into());
+        let target_a = jumps.back(tab.current()).unwrap();
+        assert_eq!(tab.jump_to(&target_a.url), super::NavOp::Load("a".into()));
+        assert!(tab.commit("a".into(), &mut jumps));
+        assert_eq!(tab.jump_to(&target_a.url), super::NavOp::None);
+        let target_b = jumps.forward().unwrap();
+        assert_eq!(tab.jump_to(&target_b.url), super::NavOp::Load("b".into()));
+        assert!(tab.commit("b".into(), &mut jumps));
+
+        // User-initiated navigation while restore was in flight records the new jump.
+        let target_a = jumps.back(tab.current()).unwrap();
+        assert_eq!(tab.jump_to(&target_a.url), super::NavOp::Load("a".into()));
+        assert_eq!(tab.current(), jump(1, "a"));
+        tab.clear_pending();
+        assert_eq!(tab.current(), jump(1, "b"));
+        tab.open("c".into());
+        assert_eq!(tab.url, "c");
+        assert!(tab.commit("c".into(), &mut jumps));
+        assert_eq!(jumps.forward(), None);
+        assert_eq!(jumps.back(tab.current()), Some(jump(1, "a")));
     }
 }

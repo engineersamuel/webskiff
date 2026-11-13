@@ -25,7 +25,7 @@ use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::edit::{self, Edited};
 use crate::history::{self, Completion, History, Saver};
 use crate::input::{self, Edit, TextInput};
-use crate::jumps::{Jump, Jumps};
+use crate::jumps::{Jump, Jumps, NavOp, TabNav};
 use crate::keys;
 use crate::render::{Hop, Layout, Renderer};
 
@@ -276,16 +276,25 @@ impl Prompt {
 }
 
 struct Tab {
-    id: u64,
+    nav: TabNav,
     view: View,
     title: String,
-    url: String,
     loading: bool,
     popup: bool,
     /// A title that came before its page's commit: applied to history on commit.
     pending_title: Option<String>,
     /// The page shown is the one loading (its load committed).
     committed: bool,
+}
+
+impl Tab {
+    fn id(&self) -> u64 {
+        self.nav.id
+    }
+
+    fn url(&self) -> &str {
+        &self.nav.url
+    }
 }
 
 struct Hint {
@@ -554,8 +563,6 @@ pub struct App {
     /// A `g e` edit runs, from its read to its write-back: no second one.
     editing: bool,
     jumps: Jumps,
-    /// The tab a jump is restoring: its switch and next commit are not new jumps.
-    restoring: Option<u64>,
 }
 
 impl App {
@@ -609,7 +616,6 @@ impl App {
             saver: Saver::spawn(crate::data_dir().join("history.tsv")),
             editing: false,
             jumps: Jumps::default(),
-            restoring: None,
         }
     }
 
@@ -782,10 +788,9 @@ impl App {
             view.load_url(url);
         }
         self.tabs.push(Tab {
-            id,
+            nav: TabNav::new(id, url.unwrap_or("").into()),
             view,
             title: String::new(),
-            url: url.unwrap_or("").into(),
             loading: url.is_some(),
             popup: false,
             pending_title: None,
@@ -795,6 +800,10 @@ impl App {
     }
 
     fn switch(&mut self, index: usize) {
+        self.switch_inner(index, true);
+    }
+
+    fn switch_inner(&mut self, index: usize, record: bool) {
         if self.tabs.is_empty() {
             return;
         }
@@ -807,7 +816,7 @@ impl App {
             if self.mode == Mode::Visual {
                 old.view.evaluate(COLLAPSE_JS, |_| {});
             }
-            Jump { tab: old.id, url: old.url.clone() }
+            Jump { tab: old.id(), url: old.url().into() }
         });
         self.active = index;
         self.find_generation += 1;
@@ -815,17 +824,17 @@ impl App {
         self.clear_hints();
         let tab = &self.tabs[index];
         let old_id = self.active_id.get();
-        if old_id != tab.id && self.index_of(old_id).is_some() {
+        if old_id != tab.id() && self.index_of(old_id).is_some() {
             self.previous_id = Some(old_id);
         }
-        self.active_id.set(tab.id);
+        self.active_id.set(tab.id());
         tab.view.set_focus(true);
         self.renderer.layout.lock().unwrap().popup = None;
         self.renderer.clear_popup();
         self.renderer.forget();
         tab.view.request_frame();
-        if self.restoring.is_none() {
-            if let Some(old) = old.filter(|old| old.tab != tab.id) {
+        if record {
+            if let Some(old) = old.filter(|old| old.tab != tab.id()) {
                 self.jumps.record(old);
             }
             self.record_jump(index);
@@ -841,9 +850,9 @@ impl App {
             return self.quit();
         }
         let tab = self.tabs.remove(self.active);
-        push_closed(&mut self.closed, tab.url.clone());
+        push_closed(&mut self.closed, tab.url().into());
         tab.view.close();
-        self.jumps.remove_tab(tab.id);
+        self.jumps.remove_tab(tab.id());
         self.switch(self.active.min(self.tabs.len() - 1));
     }
 
@@ -883,7 +892,7 @@ impl App {
     }
 
     fn index_of(&self, id: u64) -> Option<usize> {
-        self.tabs.iter().position(|t| t.id == id)
+        self.tabs.iter().position(|t| t.id() == id)
     }
 
     fn quit(&mut self) {
@@ -962,6 +971,7 @@ impl App {
             }
             LoadEvent::Failed => {
                 self.tabs[i].loading = false;
+                self.tabs[i].nav.clear_pending();
                 if i == self.active {
                     self.message = format!("load failed: {url}");
                 }
@@ -973,7 +983,7 @@ impl App {
     fn load_committed(&mut self, i: usize, url: String) {
         let tab = &mut self.tabs[i];
         // The empty page a view starts with is in its history: never stay there.
-        if url == "about:blank" && !tab.url.is_empty() && tab.url != "about:blank" {
+        if url == "about:blank" && !tab.url().is_empty() && tab.url() != "about:blank" {
             tab.view.go_forward();
             if i == self.active {
                 self.find_generation += 1;
@@ -981,22 +991,19 @@ impl App {
             }
             return;
         }
+        if !tab.nav.commit(url, &mut self.jumps) {
+            return;
+        }
         tab.committed = true;
-        let mut changed = self.history.visit(&url, history::now());
+        let mut changed = self.history.visit(tab.url(), history::now());
         if let Some(title) = tab.pending_title.take() {
-            changed |= self.history.set_title(&url, &title);
+            changed |= self.history.set_title(tab.url(), &title);
         }
         if changed {
             self.saver.changed(Instant::now());
         }
-        tab.url = url;
-        if self.restoring == Some(tab.id) {
-            self.restoring = None;
-        } else {
-            self.record_jump(i);
-        }
         let tab = &self.tabs[i];
-        self.prepared.committed(tab.id);
+        self.prepared.committed(tab.id());
         if i == self.active {
             if self.mode == Mode::Hint {
                 self.reset_hints();
@@ -1017,7 +1024,7 @@ impl App {
             let tab = &mut self.tabs[i];
             if !tab.committed {
                 tab.pending_title = Some(title.clone());
-            } else if self.history.set_title(&tab.url, &title) {
+            } else if self.history.set_title(tab.url(), &title) {
                 self.saver.changed(Instant::now());
             }
             tab.title = title;
@@ -1155,7 +1162,7 @@ impl App {
             && !self.tabs.is_empty()
         {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
-            let tab = self.tab().id;
+            let tab = self.tab().id();
             let page = self.prepared.page(tab);
             for filter in [false, true]
                 .into_iter()
@@ -1406,25 +1413,24 @@ impl App {
 
     fn record_jump(&mut self, i: usize) {
         let tab = &self.tabs[i];
-        if !tab.url.is_empty() {
-            self.jumps.record(Jump { tab: tab.id, url: tab.url.clone() });
+        if !tab.url().is_empty() {
+            self.jumps.record(Jump { tab: tab.id(), url: tab.url().into() });
         }
     }
 
     /// Go to a jumplist entry: its tab, and its page if the tab has left it.
     fn jump(&mut self, back: bool) {
-        let current = Jump { tab: self.tab().id, url: self.tab().url.clone() };
+        let current = self.tab().nav.current();
         let target = if back { self.jumps.back(current) } else { self.jumps.forward() };
         let Some((i, url)) = target.and_then(|t| Some((self.index_of(t.tab)?, t.url))) else {
             self.message = if back { "no earlier jump" } else { "no later jump" }.into();
             return;
         };
-        self.restoring = Some(self.tabs[i].id);
-        self.switch(i);
-        if self.tabs[i].url == url {
-            self.restoring = None;
-        } else {
-            self.tabs[i].view.load_url(&url);
+        self.switch_inner(i, false);
+        match self.tabs[i].nav.jump_to(&url) {
+            NavOp::Load(url) => self.tabs[i].view.load_url(&url),
+            NavOp::Stop => self.tabs[i].view.stop(),
+            NavOp::None => {}
         }
     }
 
@@ -1432,18 +1438,30 @@ impl App {
         match action {
             Action::JumpBack => self.jump(true),
             Action::JumpForward => self.jump(false),
-            Action::Back => self.view().go_back(),
-            Action::Forward => self.view().go_forward(),
-            Action::Reload => self.view().reload(),
-            Action::Stop => self.view().stop(),
             Action::UrlUp => self.go_url(
-                url_up(&self.tab().url),
+                url_up(self.tab().url()),
                 "already at the top of this address",
             ),
             Action::UrlRoot => self.go_url(
-                url_root(&self.tab().url),
+                url_root(self.tab().url()),
                 "already at the root of this address",
             ),
+            Action::Back => {
+                self.tabs[self.active].nav.clear_pending();
+                self.view().go_back();
+            }
+            Action::Forward => {
+                self.tabs[self.active].nav.clear_pending();
+                self.view().go_forward();
+            }
+            Action::Reload => {
+                self.tabs[self.active].nav.clear_pending();
+                self.view().reload();
+            }
+            Action::Stop => {
+                self.tabs[self.active].nav.clear_pending();
+                self.view().stop();
+            }
             _ => return false,
         }
         true
@@ -1458,7 +1476,7 @@ impl App {
 
     fn load_here(&mut self, url: String) {
         self.tab().view.load_url(&url);
-        self.tabs[self.active].url = url;
+        self.tabs[self.active].nav.open(url);
     }
 
     fn tab_command(&mut self, action: Action) -> bool {
@@ -1487,7 +1505,7 @@ impl App {
         match action {
             Action::Open => self.prompt(PromptKind::Open, "open: ", ""),
             Action::EditAddress => {
-                let url = self.tab().url.clone();
+                let url = self.tab().url().to_string();
                 self.prompt(PromptKind::Open, "open: ", &url)
             }
             Action::NewTab => self.prompt(PromptKind::OpenTab, "new tab: ", ""),
@@ -1516,7 +1534,7 @@ impl App {
             }
             Action::EditExternal => {
                 self.editing = true;
-                let tab = self.tab().id;
+                let tab = self.tab().id();
                 self.view().evaluate(edit::READ_JS, move |r| {
                     send(Msg::EditText {
                         tab,
@@ -1562,7 +1580,7 @@ impl App {
     }
 
     fn copy_url(&mut self) {
-        let url = self.tab().url.clone();
+        let url = self.tab().url().to_string();
         self.renderer.write(&osc52(&url));
         self.message = format!("copied {url}");
     }
@@ -1652,7 +1670,7 @@ impl App {
         let Some(t) = self.tabs.get(self.active) else {
             return;
         };
-        let id = t.id;
+        let id = t.id();
         t.view.evaluate(
             "[scrollY, innerHeight, document.scrollingElement ? document.scrollingElement.scrollHeight : 0]",
             move |r| send(Msg::Extents { tab: id, json: r.ok() }),
@@ -1736,7 +1754,7 @@ impl App {
     fn run_find(&mut self, script: &str, query: String) {
         self.find_generation += 1;
         let generation = self.find_generation;
-        let tab = self.tab().id;
+        let tab = self.tab().id();
         self.view().evaluate(script, move |result| {
             send(Msg::Found {
                 tab,
@@ -1748,7 +1766,7 @@ impl App {
     }
 
     fn found(&mut self, tab: u64, generation: u64, query: &str, result: Result<bool, String>) {
-        if self.tab().id != tab || generation != self.find_generation {
+        if self.tab().id() != tab || generation != self.find_generation {
             return;
         }
         match result {
@@ -1787,7 +1805,7 @@ impl App {
         self.hints.clear();
         self.filter = HintFilter::default();
         self.hint_session += 1;
-        let (id, session) = (self.tab().id, self.hint_session);
+        let (id, session) = (self.tab().id(), self.hint_session);
         let kept = self.prepared.slots[filter as usize]
             .as_ref()
             .filter(|p| p.0 == id)
@@ -1845,7 +1863,7 @@ impl App {
             "window.__zwebHop && __zwebHop.show({})",
             serde_json::to_string(typed).unwrap()
         );
-        let (id, session) = (self.tab().id, self.hint_session);
+        let (id, session) = (self.tab().id(), self.hint_session);
         self.view().evaluate(&js, move |r| {
             if let Some(json) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
                 send(Msg::Hints {
@@ -1938,7 +1956,7 @@ impl App {
         match self.bindings.action(Scope::Visual, k) {
             Some(Action::Cancel) => self.view().evaluate(COLLAPSE_JS, |_| {}),
             Some(Action::Yank) => {
-                let tab = self.tab().id;
+                let tab = self.tab().id();
                 self.view().evaluate(YANK_JS, move |r| {
                     send(Msg::Yanked {
                         tab,
@@ -2324,7 +2342,7 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let name = if t.title.is_empty() { &t.url } else { &t.title };
+                let name = if t.title.is_empty() { t.url() } else { &t.title };
                 format!(
                     " {}{} {} ",
                     i + 1,
@@ -2416,12 +2434,12 @@ impl App {
                 format!(
                     " {}  {}",
                     self.message,
-                    self.tabs.get(self.active).map_or("", |t| &t.url)
+                    self.tabs.get(self.active).map_or("", Tab::url)
                 ),
                 String::new(),
             ),
             None => (
-                format!(" {}", self.tabs.get(self.active).map_or("", |t| &t.url)),
+                format!(" {}", self.tabs.get(self.active).map_or("", Tab::url)),
                 String::new(),
             ),
         };
