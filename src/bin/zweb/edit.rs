@@ -119,6 +119,14 @@ mod tests {
     }
 
     #[test]
+    fn takes_crlf_as_one_newline() {
+        assert_eq!(text(result("hello\r\n", "x", false)).as_deref(), Some("hello"));
+        assert_eq!(text(result("a\r\nb\r\n", "", false)).as_deref(), Some("a\nb"));
+        assert_eq!(text(result("a\r\nb\r\n", "", true)).as_deref(), Some("a b"));
+        assert!(matches!(result("same\r\n", "same\n", false), Edited::Unchanged));
+    }
+
+    #[test]
     fn temp_file_is_private_and_new() {
         use std::os::unix::fs::PermissionsExt;
         let path = temp_file("x").unwrap();

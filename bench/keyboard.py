@@ -269,6 +269,19 @@ try:
             press(b"\t", expected="focus pw:secret")
             press(b"\t", expected="focus ro:fixed")
             press(b"\x1b")
+            # g e on a field in a disabled fieldset: refused. Leaving #off
+            # disables its fieldset; a disabled field cannot take focus first.
+            press(b"gi", expected="focus entry")
+            press(b"\t\t\t", expected="focus lg off:kept")
+            press(b"\t", expected="focus off")
+            press(b"\x1b")
+            external_edit("ok", "read-only field: not edited")
+            assert not (editor_dir / "ran").exists(), "editor ran for a disabled field"
+            # A field in the disabled fieldset's first legend is enabled: edited.
+            press(b"gi", expected="focus entry")
+            press(b"\t\t\t", expected="focus lg off:kept")
+            press(b"\x1b")
+            external_edit("ok", "legend:hello-ext")
             # The editor fails: no write-back, the edit file is deleted.
             press(b"gi", expected="focus entry")
             press(b"\x1b")
