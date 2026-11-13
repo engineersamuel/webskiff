@@ -46,6 +46,7 @@ editor.write_text(
     'case "$(cat "$d/mode")" in\n'
     "  ok) printf 'hello-ext\\n' > \"$1\";;\n"
     "  fail) printf 'changed\\n' > \"$1\"; exit 3;;\n"
+    "  wait) echo start >> \"$d/log\"; read -r k; printf %s \"$k\" > \"$d/keys\"; echo end >> \"$d/log\";;\n"
     "esac\n"
 )
 editor.chmod(0o700)
@@ -257,6 +258,17 @@ try:
             press(b"gi", expected="focus entry")
             press(b"\t", expected="focus pw:secret")
             press(b"\x1b")
+            # g e on a read-only field: refused, the editor does not run.
+            press(b"gi", expected="focus entry")
+            press(b"\t", expected="focus pw:secret")
+            press(b"\t", expected="focus ro:fixed")
+            press(b"\x1b")
+            external_edit("ok", "read-only field: not edited")
+            assert not (editor_dir / "ran").exists(), "editor ran for a read-only field"
+            press(b"gi", expected="focus entry")
+            press(b"\t", expected="focus pw:secret")
+            press(b"\t", expected="focus ro:fixed")
+            press(b"\x1b")
             # The editor fails: no write-back, the edit file is deleted.
             press(b"gi", expected="focus entry")
             press(b"\x1b")
@@ -268,6 +280,22 @@ try:
             press(b"gi")
             press(b"!", expected="input:hello?!")
             press(b"\x1b")
+            # g e twice in one write: one editor; its keys stay out of the browser.
+            (editor_dir / "mode").write_text("wait")
+            press(b"gege")
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not (editor_dir / "log").exists():
+                pump(0.05)
+            os.write(fd, b"?\r")
+            output = bytearray()
+            while time.monotonic() < deadline and "end" not in (editor_dir / "log").read_text():
+                output.extend(b"".join(data for _, data in pump(0.05)))
+            output.extend(b"".join(data for _, data in pump(1.5)))
+            log = (editor_dir / "log").read_text().split()
+            assert log == ["start", "end"], f"editor runs: {log}"
+            assert b"no change" in output, f"no status after the editor: {bytes(output[-3000:])!r}"
+            assert (editor_dir / "keys").read_text() == "?", "editor did not get its keys"
+            assert b"Webskiff keyboard help" not in output, "browser took the editor's keys"
             # Success: the text comes back, the terminal is restored.
             output = external_edit("ok", "input:hello-ext")
             assert b"\x1b[?1049h" in output, "alternate screen not entered again"

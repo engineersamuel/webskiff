@@ -10,6 +10,7 @@
 <button id="button" onclick="document.title='button activated'">Activate</button>
 <label for="entry">Text</label><input id="entry" oninput="if(!location.search)document.title='input:'+this.value">
 <input id="pw" type="password" value="secret">
+<input id="ro" readonly value="fixed">
 <p id="first">alpha alphabet alpha</p>
 <p id="second">alpha beta gamma</p>
 <p id="browser">Browser Browser</p>
@@ -25,7 +26,7 @@
         : "keyboard fixture";
     });
     document.addEventListener("focusin", event => {
-      document.title = `focus ${event.target.id}${event.target.type === "password" ? ":" + event.target.value : ""}`;
+      document.title = `focus ${event.target.id}${event.target.type === "password" || event.target.readOnly ? ":" + event.target.value : ""}`;
     });
   }
   for (let i = 0; i < 200; i++) {

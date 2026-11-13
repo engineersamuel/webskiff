@@ -106,6 +106,14 @@ mod tests {
     }
 
     #[test]
+    fn keeps_a_newline_the_field_had() {
+        assert!(matches!(result("original\n", "original\n", false), Edited::Unchanged));
+        assert_eq!(text(result("changed\n", "original\n", false)).as_deref(), Some("changed\n"));
+        assert_eq!(text(result("changed\n", "original", false)).as_deref(), Some("changed"));
+        assert_eq!(text(result("a\nb\n", "a", true)).as_deref(), Some("a b"));
+    }
+
+    #[test]
     fn temp_file_is_private_and_new() {
         use std::os::unix::fs::PermissionsExt;
         let path = temp_file("x").unwrap();
