@@ -2440,6 +2440,22 @@ mod tests {
     }
 
     #[test]
+    fn closed_tabs_keep_the_ten_newest_and_reopen_newest_first() {
+        use super::push_closed;
+        let mut stack = std::collections::VecDeque::new();
+        push_closed(&mut stack, String::new());
+        assert!(stack.is_empty());
+        for i in 1..=11 {
+            push_closed(&mut stack, format!("https://example.com/{i}"));
+        }
+        assert_eq!(stack.len(), 10);
+        for i in (2..=11).rev() {
+            assert_eq!(stack.pop_back(), Some(format!("https://example.com/{i}")));
+        }
+        assert!(stack.is_empty());
+    }
+
+    #[test]
     fn yank_writes_osc52_up_to_100000_encoded_bytes() {
         use super::yank;
         let (bytes, status) = yank("hello");

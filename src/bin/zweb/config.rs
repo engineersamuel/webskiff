@@ -537,6 +537,31 @@ mod tests {
     }
 
     #[test]
+    fn default_reopen_and_alternate_tab_bindings() {
+        let config = Config::parse("").unwrap();
+        assert_eq!(
+            action(&config, Scope::Browse, "X"),
+            Some(Action::ReopenTab)
+        );
+        assert_eq!(
+            action(&config, Scope::Browse, "^"),
+            Some(Action::AlternateTab)
+        );
+        assert_eq!(
+            action(&config, Scope::Global, "Ctrl-Shift-T"),
+            Some(Action::ReopenTab)
+        );
+        let event = |c, m| config.action(Scope::Global, KeyEvent::new(KeyCode::Char(c), m));
+        let ctrl_shift = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+        assert_eq!(event('T', ctrl_shift), Some(Action::ReopenTab));
+        assert_eq!(event('t', ctrl_shift), Some(Action::ReopenTab));
+        assert_eq!(
+            config.action(Scope::Browse, KeyEvent::from(KeyCode::Char('^'))),
+            Some(Action::AlternateTab)
+        );
+    }
+
+    #[test]
     fn rejects_invalid_and_conflicting_bindings() {
         for text in [
             "[keys.browse]\nscroll_down = ['k']",
