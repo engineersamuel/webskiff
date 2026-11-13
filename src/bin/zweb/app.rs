@@ -2248,8 +2248,11 @@ fn osc52(text: &str) -> Vec<u8> {
     format!("\x1b]52;c;{b64}\x07").into_bytes()
 }
 
-/// A yank's clipboard bytes, none if too large, and its status message.
+/// A yank's clipboard bytes, none if empty or too large, and its status message.
 pub fn yank(text: &str) -> (Option<Vec<u8>>, String) {
+    if text.is_empty() {
+        return (None, "nothing selected".into());
+    }
     let encoded = text.len().div_ceil(3) * 4;
     if encoded > YANK_MAX {
         return (
