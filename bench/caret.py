@@ -29,17 +29,19 @@ def keyname(e):
     m = re.search(r"code: (Char\('(.+?)'\)|\w+)", e); return m[2] or m[1] if m else "?"
 reads = [(t, keyname(e)) for t, e in ev if e.startswith("input read Key")]
 # Skip reads up to the v that entered visual mode, then pair keys in order.
+# A key owns only frames before the next key read; none means "no change".
 i = next(i for i, (_, k) in enumerate(reads) if k == "v") + 1
 res, missed = {}, {}
 for want in keys:
     while i < len(reads) and reads[i][1] != want: i += 1
     if i >= len(reads): break
     t = reads[i][0]; i += 1
-    after = [o for o in out if o > t]
-    if after and after[0] - t < 300: res.setdefault(want, []).append(after[0] - t)
+    nxt = reads[i][0] if i < len(reads) else float("inf")
+    after = [o for o in out if t < o < nxt and o - t < 300]
+    if after: res.setdefault(want, []).append(after[0] - t)
     else: missed[want] = missed.get(want, 0) + 1
 q = lambda v, p: sorted(v)[min(len(v)-1, int(p*len(v)))]
 for k in "ljw":
     v = res.get(k, [])
-    if v: print(f"visual {k:2} p50 {q(v,.5):6.1f}  p90 {q(v,.9):6.1f}  max {max(v):6.1f} ms  (n={len(v)}, no frame: {missed.get(k, 0)})  vs 10 ms: p90 {'OK' if q(v,.9) <= 10 else 'OVER'}")
-    else: print(f"visual {k:2} no samples (no frame: {missed.get(k, 0)})")
+    if v: print(f"visual {k:2} p50 {q(v,.5):6.1f}  p90 {q(v,.9):6.1f}  max {max(v):6.1f} ms  (n={len(v)}, no change: {missed.get(k, 0)})  vs 10 ms: p90 {'OK' if q(v,.9) <= 10 else 'OVER'}")
+    else: print(f"visual {k:2} no samples (no change: {missed.get(k, 0)})")
