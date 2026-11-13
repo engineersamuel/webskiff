@@ -763,4 +763,85 @@ mod tests {
         assert!(Config::parse("[keys.hint]\naccept = ['Enter']").is_ok());
         assert!(Config::parse("[keys.browse]\nhints_filter = ['g f']").is_ok());
     }
+
+    #[test]
+    fn default_leader_is_unbound_and_shown_in_help() {
+        let config = Config::parse("").unwrap();
+        assert!(matches!(
+            config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(',')), None),
+            Binding::Unbound
+        ));
+        assert!(config
+            .help_lines()
+            .iter()
+            .any(|line| line.contains("Leader: ,")));
+    }
+
+    #[test]
+    fn default_leader_sequence_resolves_in_browse() {
+        let config = Config::parse("[keys.browse]\nreload = ['Leader r']").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(',')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("expected ',' to be a prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+    }
+
+    #[test]
+    fn custom_leader_overrides_default_leader() {
+        let config = Config::parse("leader = ';'\n[keys.browse]\nreload = ['Leader r']").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(';')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("expected ';' to be a prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+        assert!(matches!(
+            config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(',')), None),
+            Binding::Unbound
+        ));
+        let comma = Stroke::parse(",").unwrap();
+        assert!(!matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(comma)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+        assert!(config
+            .help_lines()
+            .iter()
+            .any(|line| line.contains("Leader: ;")));
+    }
+
+    #[test]
+    fn rejects_invalid_and_conflicting_leader_configs() {
+        let conflict =
+            Config::parse("leader = 'Space'\n[keys.browse]\nreload = ['Leader x']").unwrap_err();
+        assert!(
+            conflict.contains("sequence prefix is also bound to a single-key action"),
+            "unexpected error: {conflict}"
+        );
+        for text in [
+            "leader = 42",
+            "leader = 'g g'",
+            "[keys.global]\nreload = ['Leader r']",
+        ] {
+            assert!(Config::parse(text).is_err(), "accepted {text}");
+        }
+    }
 }
