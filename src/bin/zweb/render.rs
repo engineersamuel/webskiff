@@ -1850,6 +1850,25 @@ mod tests {
     }
 
     #[test]
+    fn kitty_popup_opened_and_closed_in_one_batch_leaves_tiles_placed() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let (layout, mut rows) = five_cached_rows();
+        let before = rows.shown.clone();
+        renderer.cover(2);
+        renderer.write(b"popup");
+        renderer.cover(0);
+        let (_, pending) = renderer.wait_pending(&rows);
+        assert_eq!(pending.cover_peak, 2);
+        let mut out = Vec::new();
+        renderer.apply_cover(&pending, &layout, &mut rows, &mut out);
+        let text = String::from_utf8_lossy(&out);
+        assert!(!text.contains("a=d"), "no delete: {text:?}");
+        assert!(!text.contains("a=p"), "no placement: {text:?}");
+        assert_eq!(rows.cover, 0);
+        assert_eq!(rows.shown, before);
+    }
+
+    #[test]
     fn prediction_scores_partial_steps_and_recovers_after_hidden_hits() {
         let renderer = Renderer::new(Gfx::KittyDirect);
         let mut rows = Rows::new();
