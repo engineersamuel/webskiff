@@ -2948,15 +2948,22 @@ mod jumps_tests {
             }
         }
         assert_eq!(app.tab().view.calls.borrow().last().unwrap(), expected);
+        if matches!(action, Some(Action::Back | Action::Forward)) {
+            assert_eq!(&*app.tab().view.calls.borrow(), &["load b", "stop", expected]);
+            assert!(!app.tab().loading);
+        }
         assert_eq!(app.tab().load_generation.get(), generation + 1);
         assert!(!app.tab().nav.restoring());
         let url = if action.is_none() { "https://example.com/d" } else { "c" };
         assert_eq!(app.tab().url(), url);
         let jumps = format!("{:?}", app.jumps);
+        let prep_gen = app.prep_gen;
+        app.handle(Msg::Load { tab: app.tab().id(), generation, event: LoadEvent::Finished, url: "b".into() });
+        assert_eq!(app.prep_gen, prep_gen);
         app.handle(stale);
         assert_eq!(app.tab().url(), url);
         assert_eq!(format!("{:?}", app.jumps), jumps);
-        if action == Some(Action::Stop) {
+        if matches!(action, Some(Action::Back | Action::Forward | Action::Stop)) {
             assert!(!app.tab().loading);
         }
     }
@@ -2987,14 +2994,20 @@ mod jumps_tests {
     }
 
     #[test]
-    fn app_jumps_back_without_restore_keeps_generation() {
-        let mut app = app_with_tabs(&["c"]);
-        let generation = app.tab().load_generation.get();
-        assert!(app.navigation_command(Action::Back));
-        assert_eq!(app.tab().load_generation.get(), generation);
-        visit(&mut app, 0, "b");
-        assert_eq!(app.tab().url(), "b");
-        assert_eq!(&*app.tab().view.calls.borrow(), &["back"]);
+    fn app_jumps_back_forward_without_restore_keeps_load_state() {
+        for (action, expected) in [(Action::Back, "back"), (Action::Forward, "forward")] {
+            for loading in [false, true] {
+                let mut app = app_with_tabs(&["c"]);
+                app.tabs[0].loading = loading;
+                app.tabs[0].load_generation.set(7);
+                assert!(app.navigation_command(action));
+                assert_eq!(app.tab().load_generation.get(), 7);
+                assert_eq!(app.tab().loading, loading);
+                assert_eq!(&*app.tab().view.calls.borrow(), &[expected]);
+                visit(&mut app, 0, "b");
+                assert_eq!(app.tab().url(), "b");
+            }
+        }
     }
 
     #[test]
