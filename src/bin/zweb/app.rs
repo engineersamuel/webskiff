@@ -37,7 +37,7 @@ pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
 pub const FOCUS_INPUT_JS: &str = "(()=>{const e=[...document.querySelectorAll('input:not([type=button],[type=checkbox],[type=color],\
     [type=file],[type=hidden],[type=image],[type=radio],[type=range],[type=reset],[type=submit],:disabled,[readonly]),\
-    textarea:not(:disabled,[readonly]),[contenteditable]:not([contenteditable=false])')]\
+    textarea:not(:disabled,[readonly]),[contenteditable]:not([contenteditable=false],input,textarea)')]\
     .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
 const EDITABLE_JS: &str = concat!(editable!(), "(document.activeElement)");
 /// Defines `__zwebCaret` (caret.js) and starts a one-character selection; `false` if no text is visible.
