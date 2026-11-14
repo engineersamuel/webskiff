@@ -147,6 +147,7 @@ other terminals and multiplexers need their own acceptance tests.
 
 ### Known limits
 
+- A jump (Ctrl-O/Ctrl-I) can be overtaken by a page load started earlier: engine load callbacks carry no navigation identity, so no exact fix exists with the current engine API.
 - Some interactions exceed the **10 ms** target. We do not claim constant
   sub-10-ms latency or parity with a desktop browser.
 - Video is experimental. A tested opt-in setting improves local frame delivery

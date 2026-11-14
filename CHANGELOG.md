@@ -119,6 +119,7 @@
 
 ### Known limitations
 
+- A jump (Ctrl-O/Ctrl-I) can be overtaken by a page load started earlier: engine load callbacks carry no navigation identity, so no exact fix exists with the current engine API.
 - A source-built Homebrew tap is available for macOS on Apple Silicon.
 - Webskiff's own code is MIT-licensed. Public prebuilt binary downloads still need
   complete upstream notices and the separate platform signing checks.
