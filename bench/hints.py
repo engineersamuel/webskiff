@@ -1,7 +1,7 @@
 """Measure fresh-session and warm hop hints, including complete PTY output.
 
 After the `f` actions, `g f` filtered hints: each filter key is read until its
-`N matches` status line and quiet output, and checked for Kitty PNG
+`N matches` status line, its N hint placements and quiet output, and checked for Kitty PNG
 transmissions and for the exact atlas parts placed. Then a second page with
 mixed link texts: a text-filter letter that removes some hints."""
 
@@ -75,6 +75,23 @@ def identity_self_check():
     assert identity_error(want[:2] + want[:1], want), "a duplicate of the right count passed"
 
 
+def drain(read, seconds=3, quiet=0.1, clock=time.monotonic):
+    """Output of a filter key, read by `read(s)`: until the last `N matches`
+    status line has N hint placements after the last overlay change, then
+    `quiet` s of none."""
+    output = bytearray()
+    deadline = clock() + seconds
+    while clock() < deadline:
+        chunk = read(min(quiet, max(deadline - clock(), 0)))
+        output.extend(chunk)
+        shown = re.findall(rb"filter: [^\x1b]*?(\d+) matches", output)
+        last = output.rfind(b"\x1b_Ga=d,d=i,i=3,")
+        placed = len(re.findall(rb"a=p,i=3,", output[last:])) if last >= 0 else 0
+        if not chunk and shown and int(shown[-1]) > 0 and placed == int(shown[-1]):
+            return bytes(output)
+    raise AssertionError(f"no filter status line and its placements in {seconds} s: {bytes(output[-1000:])!r}")
+
+
 def drain_self_check():
     """An early `0 matches` status line, then the overlay late and in pieces:
     drain waits for every placement."""
@@ -139,17 +156,6 @@ def run(binary, scale):
             os.environ["ZWEB_TRACE"] = "1"
             os.execv(binary, [binary, "--gfx", "kitty", "--scale", str(scale), page])
 
-        def drain(seconds=3, quiet=0.1):
-            """Output until a `N matches` status line, then `quiet` s of none."""
-            output = bytearray()
-            deadline = time.monotonic() + seconds
-            while time.monotonic() < deadline:
-                chunk = pump(min(quiet, max(deadline - time.monotonic(), 0)))
-                output.extend(chunk)
-                if not chunk and re.search(rb"filter: [^\x1b]*?\d+ matches", output):
-                    return bytes(output)
-            raise AssertionError(f"no filter status line in {seconds} s: {bytes(output[-1000:])!r}")
-
         def pump(seconds):
             output = bytearray()
             deadline = time.monotonic() + seconds
@@ -169,7 +175,7 @@ def run(binary, scale):
 
         def press(label, keys, filtering=False, want=None):
             os.write(fd, keys)
-            raw = drain() if filtering else pump(0.3)
+            raw = drain(pump) if filtering else pump(0.3)
             uploaded = set(state["uploaded"])
             png, placed = graphics(raw, state)
             # Hint placements: of a PNG image (page tiles are raw pixels).
