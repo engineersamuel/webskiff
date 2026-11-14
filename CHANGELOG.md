@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/engineersamuel/webskiff/compare/v0.5.0...v0.6.0) (2026-11-14)
+
+
+### Features
+
+* add g u / g U address navigation and g [ / g ] history keys ([#37](https://github.com/engineersamuel/webskiff/issues/37)) ([0eb2a82](https://github.com/engineersamuel/webskiff/commit/0eb2a8218a60adb82dc3f32153c227395476ae12))
+
 ## [0.5.0](https://github.com/engineersamuel/webskiff/compare/v0.4.0...v0.5.0) (2026-11-14)
 
 
