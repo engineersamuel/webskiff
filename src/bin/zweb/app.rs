@@ -80,8 +80,10 @@ pub enum Msg {
         tab: u64,
         dialog: Dialog,
     },
+    /// A reply for hint session `session` (`start_hints`).
     Hints {
         tab: u64,
+        session: u64,
         reply: HintReply,
     },
     /// Hints read ahead (hints.js `__zwebHopPrepare()`).
@@ -480,6 +482,8 @@ pub struct App {
     hints_used: bool,
     /// `g f` was used: its hints (digit codes) are read ahead too.
     filter_used: bool,
+    /// Bumped by each `start_hints`: replies of older sessions are dropped.
+    hint_session: u64,
     find: String,
     find_generation: u64,
     message: String,
@@ -537,6 +541,7 @@ impl App {
             visual_session: 0,
             hints_used: false,
             filter_used: false,
+            hint_session: 0,
             find: String::new(),
             find_generation: 0,
             message,
@@ -845,7 +850,11 @@ impl App {
                 self.message = "opened a new tab".into();
             }
             Msg::Dialog { tab, dialog } => self.dialog_opened(tab, dialog),
-            Msg::Hints { tab, reply } => self.hint_reply_received(tab, reply),
+            Msg::Hints {
+                tab,
+                session,
+                reply,
+            } => self.hint_reply_received(tab, session, reply),
             Msg::Found {
                 tab,
                 generation,
@@ -1009,7 +1018,10 @@ impl App {
         self.draw();
     }
 
-    fn hint_reply_received(&mut self, tab: u64, reply: HintReply) {
+    fn hint_reply_received(&mut self, tab: u64, session: u64, reply: HintReply) {
+        if session != self.hint_session {
+            return;
+        }
         match reply {
             HintReply::Targets(json) => self.hints_received(tab, json),
             HintReply::Image(json) => self.hint_image_received(tab, &json),
@@ -1665,7 +1677,8 @@ impl App {
         self.hint_filter = filter;
         self.hint_typed.clear();
         self.hints.clear();
-        let id = self.tab().id;
+        self.hint_session += 1;
+        let (id, session) = (self.tab().id, self.hint_session);
         let kept = self.prepared[filter as usize]
             .as_ref()
             .filter(|p| p.0 == id)
@@ -1678,6 +1691,7 @@ impl App {
         self.view().evaluate(&js, move |r| {
             send(Msg::Hints {
                 tab: id,
+                session,
                 reply: HintReply::Targets(r.map_err(|e| e.to_string())),
             })
         });
@@ -1716,11 +1730,12 @@ impl App {
             "window.__zwebHop && __zwebHop.show({})",
             serde_json::to_string(typed).unwrap()
         );
-        let id = self.tab().id;
+        let (id, session) = (self.tab().id, self.hint_session);
         self.view().evaluate(&js, move |r| {
             if let Some(json) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
                 send(Msg::Hints {
                     tab: id,
+                    session,
                     reply: HintReply::Image(json),
                 });
             }
