@@ -6,11 +6,11 @@
 //! Blocks: `▀` cells with truecolor, for terminals without graphics.
 //! Either way only cell rows whose pixels changed are drawn.
 
+use std::collections::HashMap;
 #[cfg(target_os = "macos")]
 use std::ffi::c_void;
 use std::ffi::CString;
 use std::io::Write;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -142,7 +142,6 @@ fn half_pixel(rgb: &[u8], w: usize, h: usize, x: usize, y: usize) -> [u8; 3] {
     pixel
 }
 
-
 /// A 1x1 image of the page's background, stretched over rows not known yet.
 const BG_ID: u32 = 2;
 /// Not the hash of any row: a row shown as background.
@@ -220,12 +219,20 @@ impl Prediction {
                 best = s;
             }
         }
-        let ((best_score, movable), (mut total_score, mut total_known)) = (share(best), share(total));
+        let ((best_score, movable), (mut total_score, mut total_known)) =
+            (share(best), share(total));
         if self.shown && self.target.len() == real.len() {
             total_known = self.target.iter().filter(|h| **h != BLANK).count().max(1);
             total_score = matches(real, &self.target);
         }
-        PredictionMatch { best, total, best_score, movable, total_score, total_known }
+        PredictionMatch {
+            best,
+            total,
+            best_score,
+            movable,
+            total_score,
+            total_known,
+        }
     }
 }
 
@@ -257,11 +264,21 @@ impl Tape {
     /// The signature of a row: its tiles that scroll, if they are not all
     /// alike (an empty row is everywhere).
     fn signature(tiles: &[u64], fixed: &[bool]) -> Option<u64> {
-        let moving: Vec<u64> = tiles.iter().zip(fixed).filter(|(_, f)| !**f).map(|(t, _)| *t).collect();
+        let moving: Vec<u64> = tiles
+            .iter()
+            .zip(fixed)
+            .filter(|(_, f)| !**f)
+            .map(|(t, _)| *t)
+            .collect();
         if moving.windows(2).all(|w| w[0] == w[1]) {
             return None;
         }
-        Some(xxhash_rust::xxh3::xxh3_64(&moving.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<u8>>()))
+        Some(xxhash_rust::xxh3::xxh3_64(
+            &moving
+                .iter()
+                .flat_map(|t| t.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        ))
     }
 
     /// Finds where the frame `real` is in the page, and records its rows.
@@ -274,13 +291,25 @@ impl Tape {
         let voted = votes
             .into_iter()
             .max_by_key(|(o, c)| (*c, Some(*o) == expect))
-            .filter(|(o, c)| *c >= 3 && (expect.is_none() || Some(*o) == expect || *c > 2 * for_expect + 3))
+            .filter(|(o, c)| {
+                *c >= 3 && (expect.is_none() || Some(*o) == expect || *c > 2 * for_expect + 3)
+            })
             .map(|(o, _)| o);
-        let unchanged = before.len() == real.len() && before.iter().zip(real).filter(|(a, b)| **a == Some(**b)).count() * 2 > real.len();
-        self.offset = voted.or(expect).or(if unchanged { self.offset } else { None }).or_else(|| {
-            self.next_island += 1 << 32;
-            Some(self.next_island)
-        });
+        let unchanged = before.len() == real.len()
+            && before
+                .iter()
+                .zip(real)
+                .filter(|(a, b)| **a == Some(**b))
+                .count()
+                * 2
+                > real.len();
+        self.offset = voted
+            .or(expect)
+            .or(if unchanged { self.offset } else { None })
+            .or_else(|| {
+                self.next_island += 1 << 32;
+                Some(self.next_island)
+            });
         let off = self.offset.unwrap();
         crate::trace!("tape offset {off} (voted {voted:?}, unchanged {unchanged})");
         if self.rows.len() > 50_000 {
@@ -410,7 +439,9 @@ impl Rows {
         let id = if hash == BLANK {
             BG_ID
         } else {
-            let Some(c) = self.cache.get_mut(&hash) else { return false };
+            let Some(c) = self.cache.get_mut(&hash) else {
+                return false;
+            };
             self.clock += 1;
             c.used = self.clock;
             c.id
@@ -418,8 +449,13 @@ impl Rows {
         let src = self.cache.get(&hash).map_or("", |c| c.src.as_str());
         let (r, col, cols) = self.cell(layout, t);
         out.extend_from_slice(
-            format!("\x1b[{};{}H\x1b_Ga=p,i={id},{src}p={},c={cols},r=1,C=1,q=2\x1b\\", layout.top + r + 1, col + 1, t + 1)
-                .as_bytes(),
+            format!(
+                "\x1b[{};{}H\x1b_Ga=p,i={id},{src}p={},c={cols},r=1,C=1,q=2\x1b\\",
+                layout.top + r + 1,
+                col + 1,
+                t + 1
+            )
+            .as_bytes(),
         );
         self.unplace(out, t, old);
         self.shown[t] = Some(hash);
@@ -443,18 +479,25 @@ impl Rows {
     }
 
     fn wake_deadline(&self) -> Option<Instant> {
-        let refine = self.has_blurry_tiles().then(|| self.drawn_at + REFINE_AFTER);
+        let refine = self
+            .has_blurry_tiles()
+            .then(|| self.drawn_at + REFINE_AFTER);
         self.prediction.as_ref().map(|pr| pr.deadline).or(refine)
     }
 
     fn prediction_target(&self, total: i32) -> Vec<u64> {
         let pr = self.prediction.as_ref().unwrap();
         let mut target = shifted(&pr.base, &self.fixed, self.bands, total);
-        let Some(off) = pr.base_offset else { return target };
+        let Some(off) = pr.base_offset else {
+            return target;
+        };
         // Tiles scrolled in from beyond the screen: from the tape, if seen.
         for (t, h) in target.iter_mut().enumerate() {
             if *h == BLANK && !self.fixed[t] {
-                let seen = self.tape.rows.get(&(off + (t / self.bands) as i64 + total as i64))
+                let seen = self
+                    .tape
+                    .rows
+                    .get(&(off + (t / self.bands) as i64 + total as i64))
                     .map(|row| row[t % self.bands]);
                 if let Some(tile) = seen.filter(|tile| self.cache.contains_key(tile)) {
                     *h = tile;
@@ -467,7 +510,8 @@ impl Rows {
     fn learn_fixed(&mut self, base: &[u64], real: &[u64], total: i32) {
         // Not from the background: blank tiles look the same anywhere.
         let mut counts: HashMap<u64, usize> = HashMap::new();
-        base.iter().for_each(|h| *counts.entry(*h).or_default() += 1);
+        base.iter()
+            .for_each(|h| *counts.entry(*h).or_default() += 1);
         let background = counts.into_iter().max_by_key(|(_, c)| *c).map(|(h, _)| h);
         for t in 0..real.len() {
             let from = t as i64 + total as i64 * self.bands as i64;
@@ -482,7 +526,14 @@ impl Rows {
         }
     }
 
-    fn prepare_tile(&mut self, pixels: &mut Pixels, layout: &Layout, t: usize, hash: u64, out: &mut Vec<u8>) -> Part {
+    fn prepare_tile(
+        &mut self,
+        pixels: &mut Pixels,
+        layout: &Layout,
+        t: usize,
+        hash: u64,
+        out: &mut Vec<u8>,
+    ) -> Part {
         let (w, h) = (pixels.w, pixels.h);
         let px_row = |r: u16| (r as u64 * h as u64 / layout.rows as u64) as usize;
         let px_col = |c: u16| c as usize * w / layout.cols as usize;
@@ -501,8 +552,26 @@ impl Rows {
         out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
         let place = format!("p={},c={cols},r=1,C=1,q=2", t + 1);
         let size = rgb.len();
-        self.cache.insert(hash, Cached { id, used: self.clock, size, src: src.clone() });
-        let part = Part { before: std::mem::take(out), w: bx1 - bx0, h: by1 - by0, inner, src, id, place, rgb, hash };
+        self.cache.insert(
+            hash,
+            Cached {
+                id,
+                used: self.clock,
+                size,
+                src: src.clone(),
+            },
+        );
+        let part = Part {
+            before: std::mem::take(out),
+            w: bx1 - bx0,
+            h: by1 - by0,
+            inner,
+            src,
+            id,
+            place,
+            rgb,
+            hash,
+        };
         self.bytes += size;
         // Delete the previous placement only after the new image is sent.
         self.unplace(out, t, self.shown[t]);
@@ -537,7 +606,11 @@ impl Rows {
             let chunks: Vec<&[u8]> = hop.png.as_bytes().chunks(4096).collect();
             for (i, chunk) in chunks.iter().enumerate() {
                 let m = u8::from(i + 1 < chunks.len());
-                let head = if i == 0 { format!("a=t,f=100,i={HOP_ID},q=2,m={m}") } else { format!("m={m},q=2") };
+                let head = if i == 0 {
+                    format!("a=t,f=100,i={HOP_ID},q=2,m={m}")
+                } else {
+                    format!("m={m},q=2")
+                };
                 out.extend_from_slice(format!("\x1b_G{head};").as_bytes());
                 out.extend_from_slice(chunk);
                 out.extend_from_slice(b"\x1b\\");
@@ -563,9 +636,14 @@ impl Rows {
         if self.bytes <= CACHE_BYTES || self.prediction.is_some() {
             return;
         }
-        let on_screen: std::collections::HashSet<u64> = self.shown.iter().flatten().copied().collect();
-        let mut old: Vec<(u64, u64)> =
-            self.cache.iter().filter(|(h, _)| !on_screen.contains(h)).map(|(h, c)| (c.used, *h)).collect();
+        let on_screen: std::collections::HashSet<u64> =
+            self.shown.iter().flatten().copied().collect();
+        let mut old: Vec<(u64, u64)> = self
+            .cache
+            .iter()
+            .filter(|(h, _)| !on_screen.contains(h))
+            .map(|(h, c)| (c.used, *h))
+            .collect();
         old.sort_unstable();
         for (_, h) in old {
             if self.bytes <= CACHE_BYTES * 3 / 4 {
@@ -590,14 +668,21 @@ fn shifted(base: &[u64], fixed: &[bool], bands: usize, shift: i32) -> Vec<u64> {
             let from = t as i64 + shift as i64 * bands as i64;
             // A fixed tile does not move into another place: not known there.
             let known = from >= 0 && (from as usize) < base.len() && !fixed[from as usize];
-            if known { base[from as usize] } else { BLANK }
+            if known {
+                base[from as usize]
+            } else {
+                BLANK
+            }
         })
         .collect()
 }
 
 /// How many rows of `real` are the rows of `want` (BLANK rows not counted).
 fn matches(real: &[u64], want: &[u64]) -> usize {
-    real.iter().zip(want).filter(|(a, b)| **b != BLANK && a == b).count()
+    real.iter()
+        .zip(want)
+        .filter(|(a, b)| **b != BLANK && a == b)
+        .count()
 }
 
 impl Pending {
@@ -765,7 +850,10 @@ impl Renderer {
             self.show_prediction(&mut out, layout, rows, pending.predict);
         }
         // Not over the help screen.
-        let hop = pending.hop.as_ref().filter(|h| self.gfx != Gfx::Blocks && (h.is_none() || !layout.hidden));
+        let hop = pending
+            .hop
+            .as_ref()
+            .filter(|h| self.gfx != Gfx::Blocks && (h.is_none() || !layout.hidden));
         if let Some(h) = hop {
             rows.hop(&mut out, layout, h.as_ref());
         }
@@ -806,8 +894,12 @@ impl Renderer {
         let mut n = 0;
         let mut keep = HashMap::new();
         for (hash, (w, h, rgb, src)) in std::mem::take(&mut rows.refine) {
-            let tiles: Vec<usize> = (0..rows.shown.len()).filter(|&t| rows.shown[t] == Some(hash)).collect();
-            let Some(old) = rows.cache.get(&hash).map(|c| c.id) else { continue };
+            let tiles: Vec<usize> = (0..rows.shown.len())
+                .filter(|&t| rows.shown[t] == Some(hash))
+                .collect();
+            let Some(old) = rows.cache.get(&hash).map(|c| c.id) else {
+                continue;
+            };
             if tiles.is_empty() {
                 // Not on screen: sharp if it comes back (cached as blurry).
                 keep.insert(hash, (w, h, rgb, src));
@@ -817,10 +909,16 @@ impl Renderer {
             rows.next_id += 1;
             for (i, &t) in tiles.iter().enumerate() {
                 let (r, col, cols) = rows.cell(layout, t);
-                out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
+                out.extend_from_slice(
+                    format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes(),
+                );
                 let place = format!("{src}p={},c={cols},r=1,C=1,q=2", t + 1);
                 if i == 0 {
-                    self.transmit(&mut out, &format!("a=T,f=24,s={w},v={h},i={id},{place}"), &rgb);
+                    self.transmit(
+                        &mut out,
+                        &format!("a=T,f=24,s={w},v={h},i={id},{place}"),
+                        &rgb,
+                    );
                 } else {
                     out.extend_from_slice(format!("\x1b_Ga=p,i={id},{place}\x1b\\").as_bytes());
                 }
@@ -875,12 +973,18 @@ impl Renderer {
         pr.target = target.clone();
         if unknown > MAX_UNKNOWN_ROWS * bands {
             pr.shown = false;
-            crate::trace!("predict not shown: {} unknown tiles (base offset {:?}, total {total})", unknown, pr.base_offset);
+            crate::trace!(
+                "predict not shown: {} unknown tiles (base offset {:?}, total {total})",
+                unknown,
+                pr.base_offset
+            );
             return;
         }
         if target.contains(&BLANK) && rows.bg_sent != Some(rows.bg) {
             let b64 = base64::engine::general_purpose::STANDARD.encode(rows.bg);
-            out.extend_from_slice(format!("\x1b_Ga=t,f=24,s=1,v=1,i={BG_ID},q=2;{b64}\x1b\\").as_bytes());
+            out.extend_from_slice(
+                format!("\x1b_Ga=t,f=24,s=1,v=1,i={BG_ID},q=2;{b64}\x1b\\").as_bytes(),
+            );
             rows.bg_sent = Some(rows.bg);
         }
         for (t, h) in target.into_iter().enumerate() {
@@ -893,21 +997,34 @@ impl Renderer {
             return true;
         }
         // Only from a screen of known rows.
-        if rows.shown.iter().any(|h| h.is_none_or(|h| h == BLANK || !rows.cache.contains_key(&h))) {
+        if rows
+            .shown
+            .iter()
+            .any(|h| h.is_none_or(|h| h == BLANK || !rows.cache.contains_key(&h)))
+        {
             return false;
         }
         let base = rows.shown.iter().map(|h| h.unwrap()).collect();
         let shown = self.predict_ok.load(Ordering::Relaxed);
         let base_offset = rows.tape.offset;
-        rows.prediction =
-            Some(Prediction { base, steps: Vec::new(), deadline: Instant::now(), held: None, shown, base_offset, target: Vec::new() });
+        rows.prediction = Some(Prediction {
+            base,
+            steps: Vec::new(),
+            deadline: Instant::now(),
+            held: None,
+            shown,
+            base_offset,
+            target: Vec::new(),
+        });
         true
     }
 
     /// While a prediction waits: a frame that shows the whole scroll ends it
     /// (and teaches which rows are fixed); one that shows less is held back.
     fn settle(&self, frame: Frame, layout: &Layout, rows: &mut Rows) -> Option<Frame> {
-        let Some(pr) = &rows.prediction else { return Some(frame) };
+        let Some(pr) = &rows.prediction else {
+            return Some(frame);
+        };
         let (w, h) = (frame.width(), frame.height());
         if rows.key != Some((w, h, layout.top, layout.cols, layout.rows)) {
             rows.prediction = None;
@@ -925,7 +1042,13 @@ impl Renderer {
         Some(frame)
     }
 
-    fn record_prediction(&self, rows: &mut Rows, pr: &Prediction, score: &PredictionMatch, real: &[u64]) {
+    fn record_prediction(
+        &self,
+        rows: &mut Rows,
+        pr: &Prediction,
+        score: &PredictionMatch,
+        real: &[u64],
+    ) {
         let right = score.right();
         if right {
             rows.tape.expect = pr.base_offset.map(|o| o + score.total as i64);
@@ -948,9 +1071,21 @@ impl Renderer {
 
     fn trace_prediction(rows: &Rows, pr: &Prediction, score: &PredictionMatch, real: &[u64]) {
         if crate::trace::on() {
-            let PredictionMatch { best, total, total_score, total_known, .. } = score;
-            let want = if pr.target.len() == real.len() { pr.target.clone() } else { shifted(&pr.base, &rows.fixed, rows.bands, *total) };
-            let off: Vec<usize> = (0..real.len()).filter(|&r| want[r] != BLANK && want[r] != real[r]).collect();
+            let PredictionMatch {
+                best,
+                total,
+                total_score,
+                total_known,
+                ..
+            } = score;
+            let want = if pr.target.len() == real.len() {
+                pr.target.clone()
+            } else {
+                shifted(&pr.base, &rows.fixed, rows.bands, *total)
+            };
+            let off: Vec<usize> = (0..real.len())
+                .filter(|&r| want[r] != BLANK && want[r] != real[r])
+                .collect();
             let fixed: Vec<usize> = (0..real.len()).filter(|&r| rows.fixed[r]).collect();
             crate::trace!("settled{} best {best} of {total}, score {total_score} of {total_known}, wrong rows {off:?}, fixed {fixed:?}", if pr.shown { "" } else { " (unshown)" });
         }
@@ -981,7 +1116,13 @@ impl Renderer {
             return;
         }
         rows.drawn_at = Instant::now();
-        crate::trace!("frame encoded {} new {} moved {} KB in {:.2} ms", sent, moved, out.len() / 1024, started.elapsed().as_secs_f64() * 1000.0);
+        crate::trace!(
+            "frame encoded {} new {} moved {} KB in {:.2} ms",
+            sent,
+            moved,
+            out.len() / 1024,
+            started.elapsed().as_secs_f64() * 1000.0
+        );
         write_out(&out);
         crate::trace!("frame written");
         let mut s = self.stats.lock().unwrap();
@@ -1008,7 +1149,14 @@ impl Renderer {
         }
     }
 
-    fn draw_tiles(&self, pixels: &mut Pixels, layout: &Layout, rows: &mut Rows, hashes: &[u64], out: &mut Vec<u8>) -> (Vec<Part>, u16, u16) {
+    fn draw_tiles(
+        &self,
+        pixels: &mut Pixels,
+        layout: &Layout,
+        rows: &mut Rows,
+        hashes: &[u64],
+        out: &mut Vec<u8>,
+    ) -> (Vec<Part>, u16, u16) {
         let (mut sent, mut moved) = (0u16, 0u16);
         // (bytes before, image keys, pixels) of each new tile, in order.
         let mut parts: Vec<Part> = Vec::new();
@@ -1021,8 +1169,20 @@ impl Renderer {
                 // Cells: the whole row again.
                 let r = (t / rows.bands) as u16;
                 let row = r as usize * rows.bands..(r as usize + 1) * rows.bands;
-                rows.shown[row.clone()].iter_mut().zip(&hashes[row]).for_each(|(s, h)| *s = Some(*h));
-                blocks(pixels, out, 0, layout.top, layout.cols, layout.rows, r, r + 1);
+                rows.shown[row.clone()]
+                    .iter_mut()
+                    .zip(&hashes[row])
+                    .for_each(|(s, h)| *s = Some(*h));
+                blocks(
+                    pixels,
+                    out,
+                    0,
+                    layout.top,
+                    layout.cols,
+                    layout.rows,
+                    r,
+                    r + 1,
+                );
                 sent += 1;
                 continue;
             }
@@ -1041,7 +1201,8 @@ impl Renderer {
             return out;
         }
         let encoded = self.encode_all(&parts);
-        let mut all = Vec::with_capacity(encoded.iter().map(|e| e.0.len()).sum::<usize>() + out.len() + 4096);
+        let mut all =
+            Vec::with_capacity(encoded.iter().map(|e| e.0.len()).sum::<usize>() + out.len() + 4096);
         for (part, (image, blurry)) in parts.into_iter().zip(encoded) {
             all.extend_from_slice(&part.before);
             all.extend_from_slice(&image);
@@ -1050,7 +1211,8 @@ impl Renderer {
                 if let Some(c) = rows.cache.get_mut(&part.hash) {
                     c.src.clear();
                 }
-                rows.refine.insert(part.hash, (part.w, part.h, part.rgb, part.src));
+                rows.refine
+                    .insert(part.hash, (part.w, part.h, part.rgb, part.src));
             }
         }
         all.extend_from_slice(&out);
@@ -1068,16 +1230,30 @@ impl Renderer {
         let ch = layout.css_h as f64 / layout.rows as f64;
         let col = (x as f64 / cw).floor().max(0.0) as u16;
         let row = (y as f64 / ch).floor().max(0.0) as u16;
-        let cols = ((pw as f64 / cw).ceil() as u16).clamp(1, layout.cols.saturating_sub(col).max(1));
-        let rows = ((ph as f64 / ch).ceil() as u16).clamp(1, layout.rows.saturating_sub(row).max(1));
+        let cols =
+            ((pw as f64 / cw).ceil() as u16).clamp(1, layout.cols.saturating_sub(col).max(1));
+        let rows =
+            ((ph as f64 / ch).ceil() as u16).clamp(1, layout.rows.saturating_sub(row).max(1));
         let mut out = Vec::new();
         let mut pixels = Pixels::new(frame);
         match self.gfx {
-            Gfx::Blocks => blocks(&mut pixels, &mut out, col, layout.top + row, cols, rows, 0, rows),
+            Gfx::Blocks => blocks(
+                &mut pixels,
+                &mut out,
+                col,
+                layout.top + row,
+                cols,
+                rows,
+                0,
+                rows,
+            ),
             Gfx::KittyDirect | Gfx::KittyShm => {
                 let rgb = pixels.rgb(0, 0, w as usize, h as usize);
-                out.extend_from_slice(format!("\x1b[{};{}H", layout.top + row + 1, col + 1).as_bytes());
-                let place = format!("a=T,f=24,s={w},v={h},i={POPUP_ID},p=1,c={cols},r={rows},C=1,q=2,z=1");
+                out.extend_from_slice(
+                    format!("\x1b[{};{}H", layout.top + row + 1, col + 1).as_bytes(),
+                );
+                let place =
+                    format!("a=T,f=24,s={w},v={h},i={POPUP_ID},p=1,c={cols},r={rows},C=1,q=2,z=1");
                 self.transmit(&mut out, &place, &rgb);
             }
         }
@@ -1089,17 +1265,25 @@ impl Renderer {
     /// Returns each one's codes, and whether it was sent blurry (a photo,
     /// through the pipe: half size first, sharp when the page is still).
     fn encode_all(&self, parts: &[Part]) -> Vec<(Vec<u8>, bool)> {
-        let progressive = self.gfx == Gfx::KittyDirect && std::env::var_os("ZWEB_NOPROGRESSIVE").is_none();
+        let progressive =
+            self.gfx == Gfx::KittyDirect && std::env::var_os("ZWEB_NOPROGRESSIVE").is_none();
         let encode = |p: &Part| {
-            let keys = |w: usize, h: usize, src: &str| format!("a=T,f=24,s={w},v={h},i={},{src}{}", p.id, p.place);
+            let keys = |w: usize, h: usize, src: &str| {
+                format!("a=T,f=24,s={w},v={h},i={},{src}{}", p.id, p.place)
+            };
             if progressive && p.inner.3 >= 2 {
                 let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
                 z.write_all(&p.rgb).unwrap();
                 if z.finish().unwrap().len() * 4 > p.rgb.len() {
                     // Blurry: the tile alone, at half size.
                     let (ix, iy, iw, ih) = p.inner;
-                    let tile: Vec<u8> =
-                        (iy..iy + ih).flat_map(|y| p.rgb[(y * p.w + ix) * 3..(y * p.w + ix + iw) * 3].iter().copied()).collect();
+                    let tile: Vec<u8> = (iy..iy + ih)
+                        .flat_map(|y| {
+                            p.rgb[(y * p.w + ix) * 3..(y * p.w + ix + iw) * 3]
+                                .iter()
+                                .copied()
+                        })
+                        .collect();
                     let (hw, hh, small) = half(&tile, iw, ih);
                     let mut out = Vec::new();
                     self.transmit(&mut out, &keys(hw, hh, ""), &small);
@@ -1116,8 +1300,14 @@ impl Renderer {
         }
         let per = parts.len().div_ceil(4);
         std::thread::scope(|scope| {
-            let handles: Vec<_> = parts.chunks(per).map(|chunk| scope.spawn(move || chunk.iter().map(encode).collect::<Vec<_>>())).collect();
-            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+            let handles: Vec<_> = parts
+                .chunks(per)
+                .map(|chunk| scope.spawn(move || chunk.iter().map(encode).collect::<Vec<_>>()))
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().unwrap())
+                .collect()
         })
     }
 
@@ -1126,7 +1316,9 @@ impl Renderer {
         if self.gfx == Gfx::KittyShm {
             if let Some(name) = shm_write(rgb) {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(name);
-                out.extend_from_slice(format!("\x1b_G{place},t=s,S={};{b64}\x1b\\", rgb.len()).as_bytes());
+                out.extend_from_slice(
+                    format!("\x1b_G{place},t=s,S={};{b64}\x1b\\", rgb.len()).as_bytes(),
+                );
                 return;
             }
         }
@@ -1136,7 +1328,11 @@ impl Renderer {
         let chunks: Vec<&[u8]> = data.as_bytes().chunks(4096).collect();
         for (i, chunk) in chunks.iter().enumerate() {
             let m = u8::from(i + 1 < chunks.len());
-            let head = if i == 0 { format!("{place},o=z,m={m}") } else { format!("m={m},q=2") };
+            let head = if i == 0 {
+                format!("{place},o=z,m={m}")
+            } else {
+                format!("m={m},q=2")
+            };
             out.extend_from_slice(format!("\x1b_G{head};").as_bytes());
             out.extend_from_slice(chunk);
             out.extend_from_slice(b"\x1b\\");
@@ -1177,24 +1373,33 @@ impl Pixels {
             FrameBuffer::IoSurface(surface) => unsafe {
                 IOSurfaceLock(surface, 1, std::ptr::null_mut());
                 let base = IOSurfaceGetBaseAddress(surface) as *const u8;
-                Pixels { surface: Some(surface), base, stride: IOSurfaceGetBytesPerRow(surface), w, h }
+                Pixels {
+                    surface: Some(surface),
+                    base,
+                    stride: IOSurfaceGetBytesPerRow(surface),
+                    w,
+                    h,
+                }
             },
             #[cfg(not(target_os = "macos"))]
             FrameBuffer::IoSurface(_) => panic!("IOSurface frames require macOS"),
-            FrameBuffer::SharedMemory { pixels, stride, .. } => {
-                Pixels {
-                    #[cfg(target_os = "macos")]
-                    surface: None,
-                    base: pixels.as_ptr(), stride, w, h
-                }
-            }
+            FrameBuffer::SharedMemory { pixels, stride, .. } => Pixels {
+                #[cfg(target_os = "macos")]
+                surface: None,
+                base: pixels.as_ptr(),
+                stride,
+                w,
+                h,
+            },
             FrameBuffer::Dmabuf { .. } => panic!("dmabuf frames are not handled"),
         }
     }
 
     fn at(&self, x: usize, y: usize) -> (u8, u8, u8) {
         unsafe {
-            let p = self.base.add(y.min(self.h - 1) * self.stride + x.min(self.w - 1) * 4);
+            let p = self
+                .base
+                .add(y.min(self.h - 1) * self.stride + x.min(self.w - 1) * 4);
             (*p.add(2), *p.add(1), *p)
         }
     }
@@ -1210,7 +1415,9 @@ impl Pixels {
             hashers.clear();
             hashers.resize_with(bands, xxhash_rust::xxh3::Xxh3::new);
             for y in px_row(r)..px_row(r + 1) {
-                let line = unsafe { std::slice::from_raw_parts(self.base.add(y * self.stride), self.w * 4) };
+                let line = unsafe {
+                    std::slice::from_raw_parts(self.base.add(y * self.stride), self.w * 4)
+                };
                 for (b, hasher) in hashers.iter_mut().enumerate() {
                     hasher.update(&line[px_col(b) * 4..px_col(b + 1) * 4]);
                 }
@@ -1228,7 +1435,9 @@ impl Pixels {
     pub fn rgb(&mut self, x: usize, y: usize, w: usize, h: usize) -> Vec<u8> {
         let mut out = vec![0u8; w * h * 3];
         for row in 0..h {
-            let src = unsafe { std::slice::from_raw_parts(self.base.add((y + row) * self.stride + x * 4), w * 4) };
+            let src = unsafe {
+                std::slice::from_raw_parts(self.base.add((y + row) * self.stride + x * 4), w * 4)
+            };
             let dst = &mut out[row * w * 3..(row + 1) * w * 3];
             for (d, s) in dst.chunks_exact_mut(3).zip(src.chunks_exact(4)) {
                 d[0] = s[2];
@@ -1259,10 +1468,18 @@ static SHM_SEQ: AtomicU32 = AtomicU32::new(0);
 
 /// Writes `data` to a new POSIX shared memory object; the terminal unlinks it.
 pub fn shm_write(data: &[u8]) -> Option<String> {
-    let name = format!("/zweb-{}-{}", std::process::id(), SHM_SEQ.fetch_add(1, Ordering::Relaxed));
+    let name = format!(
+        "/zweb-{}-{}",
+        std::process::id(),
+        SHM_SEQ.fetch_add(1, Ordering::Relaxed)
+    );
     let c = CString::new(name.clone()).unwrap();
     unsafe {
-        let fd = libc::shm_open(c.as_ptr(), libc::O_CREAT | libc::O_RDWR | libc::O_EXCL, 0o600);
+        let fd = libc::shm_open(
+            c.as_ptr(),
+            libc::O_CREAT | libc::O_RDWR | libc::O_EXCL,
+            0o600,
+        );
         if fd < 0 {
             return None;
         }
@@ -1271,7 +1488,14 @@ pub fn shm_write(data: &[u8]) -> Option<String> {
             libc::shm_unlink(c.as_ptr());
             return None;
         }
-        let map = libc::mmap(std::ptr::null_mut(), data.len(), libc::PROT_WRITE, libc::MAP_SHARED, fd, 0);
+        let map = libc::mmap(
+            std::ptr::null_mut(),
+            data.len(),
+            libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
         libc::close(fd);
         if map == libc::MAP_FAILED {
             libc::shm_unlink(c.as_ptr());
@@ -1287,13 +1511,28 @@ pub fn shm_write(data: &[u8]) -> Option<String> {
 /// The frame fills `cols` x `rows` cells at (`col`, `row`); cell rows
 /// `from..to` of them are drawn.
 #[allow(clippy::too_many_arguments)]
-fn blocks(px: &mut Pixels, out: &mut Vec<u8>, col: u16, row: u16, cols: u16, rows: u16, from: u16, to: u16) {
+fn blocks(
+    px: &mut Pixels,
+    out: &mut Vec<u8>,
+    col: u16,
+    row: u16,
+    cols: u16,
+    rows: u16,
+    from: u16,
+    to: u16,
+) {
     let (w, h) = (px.w, px.h);
     // Average of a small grid in the cell half, for readable text.
     let sample = |cx: usize, half: usize| {
-        let (x0, x1) = (cx * w / cols as usize, ((cx + 1) * w / cols as usize).max(cx * w / cols as usize + 1));
+        let (x0, x1) = (
+            cx * w / cols as usize,
+            ((cx + 1) * w / cols as usize).max(cx * w / cols as usize + 1),
+        );
         let total = rows as usize * 2;
-        let (y0, y1) = (half * h / total, ((half + 1) * h / total).max(half * h / total + 1));
+        let (y0, y1) = (
+            half * h / total,
+            ((half + 1) * h / total).max(half * h / total + 1),
+        );
         let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
         let (sx, sy) = (((x1 - x0) / 3).max(1), ((y1 - y0) / 3).max(1));
         for y in (y0..y1).step_by(sy) {
@@ -1313,7 +1552,13 @@ fn blocks(px: &mut Pixels, out: &mut Vec<u8>, col: u16, row: u16, cols: u16, row
         for c in 0..cols as usize {
             let (t, b) = (sample(c, r * 2), sample(c, r * 2 + 1));
             if last != Some((t, b)) {
-                out.extend_from_slice(format!("\x1b[38;2;{};{};{};48;2;{};{};{}m", t.0, t.1, t.2, b.0, b.1, b.2).as_bytes());
+                out.extend_from_slice(
+                    format!(
+                        "\x1b[38;2;{};{};{};48;2;{};{};{}m",
+                        t.0, t.1, t.2, b.0, b.1, b.2
+                    )
+                    .as_bytes(),
+                );
                 last = Some((t, b));
             }
             out.extend_from_slice("▀".as_bytes());
@@ -1328,8 +1573,13 @@ mod tests {
 
     #[test]
     fn half_averages_partial_edge_pixels() {
-        let rgb: Vec<u8> = (0..9).flat_map(|i| [i * 10, i * 10 + 1, i * 10 + 2]).collect();
-        assert_eq!(half(&rgb, 3, 3), (2, 2, vec![20, 21, 22, 35, 36, 37, 65, 66, 67, 80, 81, 82]));
+        let rgb: Vec<u8> = (0..9)
+            .flat_map(|i| [i * 10, i * 10 + 1, i * 10 + 2])
+            .collect();
+        assert_eq!(
+            half(&rgb, 3, 3),
+            (2, 2, vec![20, 21, 22, 35, 36, 37, 65, 66, 67, 80, 81, 82])
+        );
         assert_eq!(half(&[8, 4, 2], 1, 1), (1, 1, vec![8, 4, 2]));
     }
 
@@ -1364,25 +1614,45 @@ mod tests {
     #[test]
     fn prediction_reuses_tape_tiles_and_holds_unknown_screens() {
         let renderer = Renderer::new(Gfx::KittyDirect);
-        let layout = Layout { rows: 5, cols: 16, ..Layout::default() };
+        let layout = Layout {
+            rows: 5,
+            cols: 16,
+            ..Layout::default()
+        };
         let mut rows = Rows::new();
         rows.shown = (10..15).map(Some).collect();
         rows.fixed = vec![false; 5];
         for id in 10..16 {
-            rows.cache.insert(id as u64, Cached { id, used: 0, size: 3, src: String::new() });
+            rows.cache.insert(
+                id as u64,
+                Cached {
+                    id,
+                    used: 0,
+                    size: 3,
+                    src: String::new(),
+                },
+            );
         }
         rows.tape.offset = Some(100);
         rows.tape.rows.insert(105, vec![15]);
         let mut out = Vec::new();
         renderer.show_prediction(&mut out, &layout, &mut rows, 1);
-        assert_eq!(rows.shown, vec![Some(11), Some(12), Some(13), Some(14), Some(15)]);
+        assert_eq!(
+            rows.shown,
+            vec![Some(11), Some(12), Some(13), Some(14), Some(15)]
+        );
         assert!(rows.prediction.as_ref().unwrap().shown);
-        assert!(out.starts_with(b"\x1b[1;1H\x1b_Ga=p,i=11,p=1,c=16,r=1,C=1,q=2\x1b\\\x1b_Ga=d,d=i,i=10,p=1,q=2\x1b\\"));
+        assert!(out.starts_with(
+            b"\x1b[1;1H\x1b_Ga=p,i=11,p=1,c=16,r=1,C=1,q=2\x1b\\\x1b_Ga=d,d=i,i=10,p=1,q=2\x1b\\"
+        ));
         out.clear();
         renderer.show_prediction(&mut out, &layout, &mut rows, 5);
         assert!(out.is_empty());
         assert!(!rows.prediction.as_ref().unwrap().shown);
-        assert_eq!(rows.shown, vec![Some(11), Some(12), Some(13), Some(14), Some(15)]);
+        assert_eq!(
+            rows.shown,
+            vec![Some(11), Some(12), Some(13), Some(14), Some(15)]
+        );
     }
 
     #[test]
@@ -1391,9 +1661,13 @@ mod tests {
         let mut rows = Rows::new();
         rows.fixed = vec![false; 5];
         let mut prediction = Prediction {
-            base: vec![1, 2, 3, 4, 5], steps: vec![1, 2],
-            deadline: Instant::now() + SETTLE, held: None, shown: true,
-            base_offset: Some(100), target: vec![3, 4, 5, BLANK, BLANK],
+            base: vec![1, 2, 3, 4, 5],
+            steps: vec![1, 2],
+            deadline: Instant::now() + SETTLE,
+            held: None,
+            shown: true,
+            base_offset: Some(100),
+            target: vec![3, 4, 5, BLANK, BLANK],
         };
         let partial = prediction.score(&[2, 3, 4, 5, 6], &rows.fixed, 1);
         assert!(partial.partial(&prediction));
@@ -1419,8 +1693,13 @@ mod tests {
         let renderer = Renderer::new(Gfx::KittyDirect);
         renderer.layout.lock().unwrap().hidden = true;
         *renderer.pending.lock().unwrap() = Pending {
-            text: b"help".to_vec(), predict: 2, clear_all: true,
-            clear_popup: true, forget: true, stop: true, ..Pending::default()
+            text: b"help".to_vec(),
+            predict: 2,
+            clear_all: true,
+            clear_popup: true,
+            forget: true,
+            stop: true,
+            ..Pending::default()
         };
         let (layout, pending) = renderer.wait_pending(&Rows::new());
         assert!(layout.hidden);
@@ -1436,7 +1715,12 @@ mod tests {
     #[test]
     fn tiles_preserve_borders_and_place_cached_images_before_deleting_old_ones() {
         let renderer = Renderer::new(Gfx::KittyDirect);
-        let layout = Layout { top: 1, cols: 2, rows: 2, ..Layout::default() };
+        let layout = Layout {
+            top: 1,
+            cols: 2,
+            rows: 2,
+            ..Layout::default()
+        };
         let mut rows = Rows::new();
         let mut out = Vec::new();
         renderer.prepare_page((4, 4), &layout, &mut rows, &mut out);
@@ -1444,33 +1728,46 @@ mod tests {
         let mut pixels = Pixels {
             #[cfg(target_os = "macos")]
             surface: None,
-            base: bgra.as_ptr(), stride: 16, w: 4, h: 4,
+            base: bgra.as_ptr(),
+            stride: 16,
+            w: 4,
+            h: 4,
         };
-        let (parts, sent, moved) = renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[101, 102], &mut out);
+        let (parts, sent, moved) =
+            renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[101, 102], &mut out);
         assert_eq!((sent, moved, rows.bytes), (2, 0, 72));
         assert_eq!(parts[0].inner, (0, 0, 4, 2));
         assert_eq!(parts[1].inner, (0, 1, 4, 2));
         assert_eq!(&parts[0].rgb[..3], &[2, 1, 0]);
         assert_eq!(&parts[1].rgb[..3], &[6, 5, 4]);
-        let (unchanged, sent, moved) = renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[101, 102], &mut out);
+        let (unchanged, sent, moved) =
+            renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[101, 102], &mut out);
         assert!(unchanged.is_empty() && out.is_empty());
         assert_eq!((sent, moved), (0, 0));
-        let (reused, sent, moved) = renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[102, 101], &mut out);
+        let (reused, sent, moved) =
+            renderer.draw_tiles(&mut pixels, &layout, &mut rows, &[102, 101], &mut out);
         assert!(reused.is_empty());
         assert_eq!((sent, moved), (0, 2));
-        assert_eq!(out, concat!(
-            "\x1b[2;1H\x1b_Ga=p,i=11,x=0,y=1,w=4,h=2,p=1,c=2,r=1,C=1,q=2\x1b\\",
-            "\x1b_Ga=d,d=i,i=10,p=1,q=2\x1b\\",
-            "\x1b[3;1H\x1b_Ga=p,i=10,x=0,y=0,w=4,h=2,p=2,c=2,r=1,C=1,q=2\x1b\\",
-            "\x1b_Ga=d,d=i,i=11,p=2,q=2\x1b\\",
-        ).as_bytes());
+        assert_eq!(
+            out,
+            concat!(
+                "\x1b[2;1H\x1b_Ga=p,i=11,x=0,y=1,w=4,h=2,p=1,c=2,r=1,C=1,q=2\x1b\\",
+                "\x1b_Ga=d,d=i,i=10,p=1,q=2\x1b\\",
+                "\x1b[3;1H\x1b_Ga=p,i=10,x=0,y=0,w=4,h=2,p=2,c=2,r=1,C=1,q=2\x1b\\",
+                "\x1b_Ga=d,d=i,i=11,p=2,q=2\x1b\\",
+            )
+            .as_bytes()
+        );
     }
 
     #[test]
     fn shift_keeps_fixed_rows_and_blanks_new_ones() {
         let base = [10, 1, 2, 3, 4, 20];
         let fixed = [true, false, false, false, false, true];
-        assert_eq!(shifted(&base, &fixed, 1, 2), vec![10, 3, 4, BLANK, BLANK, 20]);
+        assert_eq!(
+            shifted(&base, &fixed, 1, 2),
+            vec![10, 3, 4, BLANK, BLANK, 20]
+        );
         assert_eq!(shifted(&base, &fixed, 1, -1), vec![10, BLANK, 1, 2, 3, 20]);
         assert_eq!(shifted(&base, &fixed, 1, 0), base.to_vec());
         // Two bands: a fixed sidebar (band 0) beside text that scrolls (band 1).

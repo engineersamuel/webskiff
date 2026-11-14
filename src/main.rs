@@ -66,7 +66,10 @@ fn frame_rgba(frame: &Frame) -> Vec<u8> {
         #[cfg(target_os = "macos")]
         FrameBuffer::IoSurface(surface) => unsafe {
             IOSurfaceLock(surface, READ_ONLY, std::ptr::null_mut());
-            copy(IOSurfaceGetBaseAddress(surface) as *const u8, IOSurfaceGetBytesPerRow(surface));
+            copy(
+                IOSurfaceGetBaseAddress(surface) as *const u8,
+                IOSurfaceGetBytesPerRow(surface),
+            );
             IOSurfaceUnlock(surface, READ_ONLY, std::ptr::null_mut());
         },
         #[cfg(not(target_os = "macos"))]
@@ -83,7 +86,11 @@ fn kitty(png: &[u8], cols: u32) {
     let mut out = std::io::stdout().lock();
     for (i, chunk) in chunks.iter().enumerate() {
         let more = u8::from(i + 1 < chunks.len());
-        let head = if i == 0 { format!("f=100,a=T,c={cols},m={more}") } else { format!("m={more}") };
+        let head = if i == 0 {
+            format!("f=100,a=T,c={cols},m={more}")
+        } else {
+            format!("m={more}")
+        };
         write!(out, "\x1b_G{head};").unwrap();
         out.write_all(chunk).unwrap();
         write!(out, "\x1b\\").unwrap();
@@ -92,10 +99,20 @@ fn kitty(png: &[u8], cols: u32) {
 }
 
 fn capture(frame: &Frame, mode: Mode, arg: &str) {
-    mark(&format!("frame {}x{} @{} (seq {})", frame.width(), frame.height(), frame.scale(), frame.sequence()));
+    mark(&format!(
+        "frame {}x{} @{} (seq {})",
+        frame.width(),
+        frame.height(),
+        frame.scale(),
+        frame.sequence()
+    ));
     let rgba = frame_rgba(frame);
     mark("pixels copied (BGRA -> RGBA)");
-    let image = Image { width: frame.width(), height: frame.height(), rgba };
+    let image = Image {
+        width: frame.width(),
+        height: frame.height(),
+        rgba,
+    };
     let png = encode_image(ImageFormat::Png, &image, 0).expect("encode PNG");
     mark(&format!("PNG encoded ({} KB)", png.len() / 1024));
     match mode {
@@ -128,32 +145,42 @@ fn main() {
     let url = args.get(2).expect(usage).clone();
     let arg = args.get(3).cloned().unwrap_or_else(|| "probe.png".into());
 
-    let code = zebkit::run_with_args(["zebkit-probe", "--headless", "--zebkit-cookie-storage=file"], move || {
-        mark("engine ready");
-        zebkit::after(TIMEOUT, || {
-            mark("TIMEOUT");
-            zebkit::quit();
-        });
-        let view = View::new_offscreen(None, WIDTH, HEIGHT, 1.0).expect("off-screen view");
-        let loaded = Rc::new(Cell::new(false));
-        let done = Rc::new(Cell::new(false));
-        let frames = Rc::new(Cell::new(0u32));
+    let code = zebkit::run_with_args(
+        ["zebkit-probe", "--headless", "--zebkit-cookie-storage=file"],
+        move || {
+            mark("engine ready");
+            zebkit::after(TIMEOUT, || {
+                mark("TIMEOUT");
+                zebkit::quit();
+            });
+            let view = View::new_offscreen(None, WIDTH, HEIGHT, 1.0).expect("off-screen view");
+            let loaded = Rc::new(Cell::new(false));
+            let done = Rc::new(Cell::new(false));
+            let frames = Rc::new(Cell::new(0u32));
 
-        // Scroll mode: when the wheel event was sent, and the latencies so far.
-        let sent: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
-        let latencies: Rc<std::cell::RefCell<Vec<f64>>> = Rc::default();
-        let wheel = {
-            let (view, sent) = (view.clone(), sent.clone());
-            Rc::new(move || {
-                sent.set(Some(Instant::now()));
-                view.send_wheel(640.0, 400.0, 0.0, 200.0, false, WheelPhase::None, Modifiers::default());
-            })
-        };
+            // Scroll mode: when the wheel event was sent, and the latencies so far.
+            let sent: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
+            let latencies: Rc<std::cell::RefCell<Vec<f64>>> = Rc::default();
+            let wheel = {
+                let (view, sent) = (view.clone(), sent.clone());
+                Rc::new(move || {
+                    sent.set(Some(Instant::now()));
+                    view.send_wheel(
+                        640.0,
+                        400.0,
+                        0.0,
+                        200.0,
+                        false,
+                        WheelPhase::None,
+                        Modifiers::default(),
+                    );
+                })
+            };
 
-        if mode == Mode::Scroll {
-            let page = view.clone();
-            let (sent, latencies, wheel) = (sent.clone(), latencies.clone(), wheel.clone());
-            view.on_frame(move |frame| {
+            if mode == Mode::Scroll {
+                let page = view.clone();
+                let (sent, latencies, wheel) = (sent.clone(), latencies.clone(), wheel.clone());
+                view.on_frame(move |frame| {
                 let Some(at) = sent.take() else { return };
                 let got = at.elapsed().as_secs_f64() * 1000.0;
                 let t = Instant::now();
@@ -177,56 +204,66 @@ fn main() {
                     });
                 }
             });
-        } else if mode != Mode::Text {
-            let (loaded, done, frames, arg) = (loaded.clone(), done.clone(), frames.clone(), arg.clone());
-            view.on_frame(move |frame| {
-                frames.set(frames.get() + 1);
-                if frames.get() == 1 {
-                    mark("first frame (before load finished)");
-                }
-                if loaded.get() && !done.get() {
-                    done.set(true);
-                    capture(&frame, mode, &arg);
-                    zebkit::quit();
+            } else if mode != Mode::Text {
+                let (loaded, done, frames, arg) =
+                    (loaded.clone(), done.clone(), frames.clone(), arg.clone());
+                view.on_frame(move |frame| {
+                    frames.set(frames.get() + 1);
+                    if frames.get() == 1 {
+                        mark("first frame (before load finished)");
+                    }
+                    if loaded.get() && !done.get() {
+                        done.set(true);
+                        capture(&frame, mode, &arg);
+                        zebkit::quit();
+                    }
+                });
+            }
+
+            let page = view.clone();
+            view.on_load(move |event, detail| {
+                mark(&format!("load {event:?} {detail}"));
+                match event {
+                    LoadEvent::Finished if !loaded.get() => {
+                        loaded.set(true);
+                        if mode == Mode::Text {
+                            page.evaluate(
+                                "document.body ? document.body.innerText : ''",
+                                |result| {
+                                    mark("text extracted");
+                                    match result {
+                                        Ok(json) => {
+                                            let text: String =
+                                                serde_json::from_str(&json).unwrap_or(json);
+                                            eprintln!(
+                                                "               {} chars, {} lines",
+                                                text.len(),
+                                                text.lines().count()
+                                            );
+                                            println!("{text}");
+                                        }
+                                        Err(e) => eprintln!("evaluate failed: {e:?}"),
+                                    }
+                                    zebkit::quit();
+                                },
+                            );
+                        } else if mode == Mode::Scroll {
+                            page.set_focus(true);
+                            let wheel = wheel.clone();
+                            zebkit::after(Duration::from_millis(1500), move || wheel());
+                        } else {
+                            page.request_frame();
+                        }
+                    }
+                    LoadEvent::Failed => zebkit::quit(),
+                    _ => {}
                 }
             });
-        }
-
-        let page = view.clone();
-        view.on_load(move |event, detail| {
-            mark(&format!("load {event:?} {detail}"));
-            match event {
-                LoadEvent::Finished if !loaded.get() => {
-                    loaded.set(true);
-                    if mode == Mode::Text {
-                        page.evaluate("document.body ? document.body.innerText : ''", |result| {
-                            mark("text extracted");
-                            match result {
-                                Ok(json) => {
-                                    let text: String = serde_json::from_str(&json).unwrap_or(json);
-                                    eprintln!("               {} chars, {} lines", text.len(), text.lines().count());
-                                    println!("{text}");
-                                }
-                                Err(e) => eprintln!("evaluate failed: {e:?}"),
-                            }
-                            zebkit::quit();
-                        });
-                    } else if mode == Mode::Scroll {
-                        page.set_focus(true);
-                        let wheel = wheel.clone();
-                        zebkit::after(Duration::from_millis(1500), move || wheel());
-                    } else {
-                        page.request_frame();
-                    }
-                }
-                LoadEvent::Failed => zebkit::quit(),
-                _ => {}
-            }
-        });
-        view.load_url(&url);
-        mark("load requested");
-        std::mem::forget(view);
-    });
+            view.load_url(&url);
+            mark("load requested");
+            std::mem::forget(view);
+        },
+    );
     mark(&format!("engine stopped (exit {code})"));
     std::process::exit(code);
 }

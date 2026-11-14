@@ -94,6 +94,7 @@ Press **`?`** or **`F1`** for the full list, generated from your configuration.
 | Close tab | `x` | `Ctrl-W` |
 | Next / previous browser tab | `]` / `[` | `Ctrl-Tab` / `Ctrl-Shift-Tab` |
 | Follow a link with hints | `f` | Mouse click |
+| Select and copy page text | `v`, move, `y` | Mouse select is not possible |
 | Move through page controls | `Tab` / `Shift-Tab` | `Tab` / `Shift-Tab` |
 | Leave page typing mode | `Esc` | `Esc` |
 | Show keyboard help | `?` | `F1` |
@@ -104,6 +105,9 @@ Then use `n` or `N`. Escape cancels an unaccepted search.
 In page text fields, typing goes to the page; `?` remains a normal character.
 Some terminals intercept browser-style shortcuts. The Vim alternatives remain
 available. Bare `q` shows a quit reminder rather than closing your session.
+With `v`, selection starts at the find match, else at the first visible text.
+Move with `h`/`l`, `j`/`k`, `w`/`b`, `0`/`$`. `y` copies through OSC 52;
+selections over 100,000 base64 bytes are refused. `Esc` cancels.
 
 ## Configuration
 

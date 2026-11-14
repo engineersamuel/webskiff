@@ -17,6 +17,7 @@ Speed is the most important property of Webskiff. Never sacrifice speed.
 - Harnesses in `bench/` (run from that directory, with the webskiff binary as the
   first argument): `lat.py` (scroll latency), `inter.py` (page down/up,
   typing, hints, tab switch), `bench.py` (bytes per action), `scrollcpu.py`
-  (CPU while scrolling), `idle.py` (bytes and CPU on an idle page).
+  (CPU while scrolling), `idle.py` (bytes and CPU on an idle page),
+  `caret.py` (visual-mode l/j/w, key to pixels).
   Example: `uv run --no-project python -I lat.py ../target/release/webskiff https://en.wikipedia.org/wiki/Cat 30`
 - `webskiff --selftest` must pass.

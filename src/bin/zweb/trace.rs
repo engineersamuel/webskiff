@@ -18,7 +18,9 @@ pub fn on() -> bool {
 
 pub fn mark(what: std::fmt::Arguments) {
     if on() {
-        let t = START.get().map_or(0.0, |s| s.elapsed().as_secs_f64() * 1000.0);
+        let t = START
+            .get()
+            .map_or(0.0, |s| s.elapsed().as_secs_f64() * 1000.0);
         eprintln!("T {t:10.2} {what}");
     }
 }
@@ -54,7 +56,10 @@ pub fn ticks_us() -> i64 {
 
 #[cfg(target_os = "linux")]
 pub fn ticks_us() -> i64 {
-    let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) };
     assert_eq!(result, 0, "cannot read the monotonic clock");
     time.tv_sec * 1_000_000 + time.tv_nsec / 1_000

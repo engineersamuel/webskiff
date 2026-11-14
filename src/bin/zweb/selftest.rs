@@ -4,16 +4,21 @@
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use flate2::{write::ZlibEncoder, Compression};
 use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse};
 use zebkit::page::DialogPolicy;
 use zebkit::{LoadEvent, View};
 
-use crate::{app::{FIND_JS, HINTS_JS}, keys, render};
+use crate::app::{
+    visual_script, yank, App, Msg, Options, APP, FIND_JS, HINTS_JS, VISUAL_START_JS, YANK_JS,
+};
+use crate::config::{Action, Config};
+use crate::{keys, render};
 
 const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:16px sans-serif}
 #f{position:absolute;left:10px;top:10px;width:200px;height:20px}
@@ -23,7 +28,8 @@ const PAGE: &str = r#"<!doctype html><title>t</title><style>body{margin:0;font:1
 <select id=s><option>one</option><option>two</option></select>
 <button id=w onclick="window.open('about:blank')">popup</button>
 <a id=t1 href=#a onclick="window.followed=1;return false" style="position:absolute;top:2000px">find target</a>
-<a id=t2 href=#b onclick="window.followed=2;return false" style="position:absolute;top:2100px">other target</a>"#;
+<a id=t2 href=#b onclick="window.followed=2;return false" style="position:absolute;top:2100px">other target</a>
+<p id=v style="position:absolute;top:300px">alpha bravo charlie</p>"#;
 
 #[derive(Default)]
 struct Ctx {
@@ -40,7 +46,19 @@ type Act = Box<dyn Fn(&Rc<Ctx>, &View)>;
 enum Check {
     Js(&'static str, &'static str),
     Flag(fn(&Ctx) -> bool),
+    /// Passes when the condition holds within 10 s; checked every 50 ms.
+    Until(fn() -> bool),
     None,
+}
+
+fn wait_until(cond: fn() -> bool, deadline: Instant, done: Box<dyn FnOnce(bool)>) {
+    if cond() || Instant::now() >= deadline {
+        done(cond());
+        return;
+    }
+    zebkit::after(Duration::from_millis(50), move || {
+        wait_until(cond, deadline, done)
+    });
 }
 
 fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
@@ -63,12 +81,67 @@ fn click(view: &View, x: f32, y: f32) {
     view.send_mouse(ZMouse::Up, x, y, MouseButton::Left, 1, Modifiers::NONE);
 }
 
+const APP_PAGE: &str =
+    "data:text/html,<style>*{margin:0}</style><p style='font:16px sans-serif'>hello world</p>";
+
+/// Gives the app `codes` in one turn, as keys typed together come, then
+/// stores [in Visual mode, the page selection] as `window.<name>` on `report`.
+fn app_keys(report: &View, name: &'static str, codes: &[KeyCode]) {
+    let events: Vec<Event> = codes
+        .iter()
+        .map(|&code| Event::Key(key(code, KeyModifiers::NONE)))
+        .collect();
+    app_events(report, name, &events);
+}
+
+/// As `app_keys`, with any terminal events.
+fn app_events(report: &View, name: &'static str, events: &[Event]) {
+    APP.with(|a| {
+        let mut a = a.borrow_mut();
+        let app = a.as_mut().expect("app");
+        for e in events {
+            app.handle(Msg::Term(e.clone()));
+        }
+    });
+    let report = report.clone();
+    zebkit::after(Duration::from_millis(400), move || {
+        let (visual, page) = APP.with(|a| {
+            let a = a.borrow();
+            let app = a.as_ref().expect("app");
+            (app.in_visual(), app.view())
+        });
+        page.evaluate("getSelection().toString()", move |r| {
+            let sel = r.unwrap_or_default();
+            report.evaluate(
+                &format!("window.{name}=JSON.stringify([{visual},{sel}])"),
+                |_| {},
+            );
+        });
+    });
+}
+
 fn steps() -> Vec<(&'static str, Act, Check)> {
     vec![
-        ("click focuses the input", Box::new(|_, v| click(v, 110.0, 20.0)), Check::Js("document.activeElement.id", "\"f\"")),
-        ("caret callback fires", Box::new(|_, _| {}), Check::Flag(|c| c.caret.get())),
-        ("typing text", Box::new(|_, v| typed(v, "Hi there")), Check::Js("f.value", "\"Hi there\"")),
-        ("Backspace", Box::new(|_, v| press(v, key(KeyCode::Backspace, KeyModifiers::NONE))), Check::Js("f.value", "\"Hi ther\"")),
+        (
+            "click focuses the input",
+            Box::new(|_, v| click(v, 110.0, 20.0)),
+            Check::Js("document.activeElement.id", "\"f\""),
+        ),
+        (
+            "caret callback fires",
+            Box::new(|_, _| {}),
+            Check::Flag(|c| c.caret.get()),
+        ),
+        (
+            "typing text",
+            Box::new(|_, v| typed(v, "Hi there")),
+            Check::Js("f.value", "\"Hi there\""),
+        ),
+        (
+            "Backspace",
+            Box::new(|_, v| press(v, key(KeyCode::Backspace, KeyModifiers::NONE))),
+            Check::Js("f.value", "\"Hi ther\""),
+        ),
         (
             "arrow keys move the caret",
             Box::new(|_, v| {
@@ -78,7 +151,11 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("f.value", "\"Hi thXer\""),
         ),
-        ("paste (bracketed paste -> IME commit)", Box::new(|_, v| v.ime_commit(" ✓ok")), Check::Js("f.value", "\"Hi thX ✓oker\"")),
+        (
+            "paste (bracketed paste -> IME commit)",
+            Box::new(|_, v| v.ime_commit(" ✓ok")),
+            Check::Js("f.value", "\"Hi thX ✓oker\""),
+        ),
         (
             "Ctrl-A selects all, then typing replaces",
             Box::new(|_, v| {
@@ -87,7 +164,11 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("f.value", "\"z\""),
         ),
-        ("Enter submits the form", Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))), Check::Js("document.title", "\"submitted:z\"")),
+        (
+            "Enter submits the form",
+            Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))),
+            Check::Js("document.title", "\"submitted:z\""),
+        ),
         (
             "hint script finds 4 targets and its click works",
             Box::new(|_, v| {
@@ -98,15 +179,34 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                         .and_then(|j| serde_json::from_str::<String>(&j).ok())
                         .and_then(|j| serde_json::from_str(&j).ok())
                         .unwrap_or_default();
-                    println!("      hints: {}", list.iter().map(|h| h["k"].as_str().unwrap_or("?")).collect::<Vec<_>>().join(" "));
+                    println!(
+                        "      hints: {}",
+                        list.iter()
+                            .map(|h| h["k"].as_str().unwrap_or("?"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
                     let rendered = list.iter().all(|h| h["k"].is_string());
-                    if let Some(h) = list.iter().find(|h| (h["y"].as_f64().unwrap_or(0.0) - 75.0).abs() < 10.0) {
-                        click(&page, h["x"].as_f64().unwrap() as f32, h["y"].as_f64().unwrap() as f32);
+                    if let Some(h) = list
+                        .iter()
+                        .find(|h| (h["y"].as_f64().unwrap_or(0.0) - 75.0).abs() < 10.0)
+                    {
+                        click(
+                            &page,
+                            h["x"].as_f64().unwrap() as f32,
+                            h["y"].as_f64().unwrap() as f32,
+                        );
                     }
-                    page.evaluate(&format!("window.hintCount={}", if rendered { list.len() } else { 0 }), |_| {});
+                    page.evaluate(
+                        &format!("window.hintCount={}", if rendered { list.len() } else { 0 }),
+                        |_| {},
+                    );
                 });
             }),
-            Check::Js("[window.hintCount, b.textContent, !!window.__zwebHop].join()", "\"4,clicked,true\""),
+            Check::Js(
+                "[window.hintCount, b.textContent, !!window.__zwebHop].join()",
+                "\"4,clicked,true\"",
+            ),
         ),
         (
             "select opens a popup layer",
@@ -124,8 +224,16 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("s.value", "\"two\""),
         ),
-        ("popup closed after choosing", Box::new(|_, _| {}), Check::Flag(|c| !c.popup.get())),
-        ("window.open becomes a new view", Box::new(|_, v| click(v, 60.0, 175.0)), Check::Flag(|c| c.opened.get())),
+        (
+            "popup closed after choosing",
+            Box::new(|_, _| {}),
+            Check::Flag(|c| !c.popup.get()),
+        ),
+        (
+            "window.open becomes a new view",
+            Box::new(|_, v| click(v, 60.0, 175.0)),
+            Check::Flag(|c| c.opened.get()),
+        ),
         (
             "confirm() is held for the app",
             Box::new(|_, v| v.evaluate("setTimeout(()=>{window.r=confirm('ok?')},10)", |_| {})),
@@ -155,7 +263,142 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("document.activeElement.id", "\"t2\""),
         ),
-        ("Enter opens the link at the match", Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))), Check::Js("window.followed", "2")),
+        (
+            "Enter opens the link at the match",
+            Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))),
+            Check::Js("window.followed", "2"),
+        ),
+        (
+            "visual mode: from a find match, w extends over the word, y yanks it as OSC 52",
+            Box::new(|_, v| {
+                // A find match on "bravo", as window.find leaves it.
+                v.evaluate(
+                    "const r=new Range();r.setStart(v.firstChild,6);r.setEnd(v.firstChild,11);\
+                    getSelection().removeAllRanges();getSelection().addRange(r)",
+                    |_| {},
+                );
+                v.evaluate(VISUAL_START_JS, |_| {});
+                v.evaluate(&visual_script(Action::WordForward).unwrap(), |_| {});
+                let page = v.clone();
+                v.evaluate(YANK_JS, move |r| {
+                    let text = r
+                        .ok()
+                        .and_then(|j| serde_json::from_str::<String>(&j).ok())
+                        .unwrap_or_default();
+                    let osc = yank(&text).0.unwrap_or_default();
+                    let payload = std::str::from_utf8(&osc)
+                        .ok()
+                        .and_then(|s| s.strip_prefix("\x1b]52;c;")?.strip_suffix('\x07'))
+                        .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+                        .unwrap_or_default();
+                    let js = format!(
+                        "window.yanked={}",
+                        serde_json::to_string(&String::from_utf8_lossy(&payload)).unwrap()
+                    );
+                    page.evaluate(&js, |_| {});
+                });
+            }),
+            Check::Js("window.yanked", "\"bravo\""),
+        ),
+        (
+            "visual mode: start skips text above the viewport, and finds none when none is shown",
+            Box::new(|_, v| {
+                v.evaluate(
+                    "document.body.innerHTML='<div style=\"height:2000px\">hidden above</div>\
+                    <p>visible text</p><div style=\"height:2000px\"></div>'",
+                    |_| {},
+                );
+                for (scroll, name) in [(1000, "none"), (1500, "some")] {
+                    let page = v.clone();
+                    v.evaluate(
+                        &format!(
+                            "getSelection().removeAllRanges();scrollTo(0,{scroll});{VISUAL_START_JS}"
+                        ),
+                        move |r| {
+                            let ok = r.unwrap_or_default();
+                            page.evaluate(
+                                &format!("window.{name}={ok};window.got=getSelection().toString()"),
+                                |_| {},
+                            );
+                        },
+                    );
+                }
+            }),
+            Check::Js(
+                "JSON.stringify([window.none, window.some, window.got])",
+                "\"[false,true,\\\"v\\\"]\"",
+            ),
+        ),
+        (
+            "app: opens a page through its own tab",
+            Box::new(|_, _| {
+                let renderer = Arc::new(render::Renderer::new(render::Gfx::KittyDirect));
+                *renderer.layout.lock().unwrap() = render::Layout {
+                    top: 1,
+                    cols: 100,
+                    rows: 37,
+                    css_w: 800,
+                    css_h: 600,
+                    ..Default::default()
+                };
+                let opts = Options {
+                    scale: Some(1),
+                    placeholders: false,
+                    enhanced: false,
+                };
+                let mut app = App::new(renderer, opts, Config::parse("").unwrap());
+                app.open_tab(Some(APP_PAGE), None);
+                APP.with(|a| *a.borrow_mut() = Some(app));
+            }),
+            Check::Until(|| APP.with(|a| !a.borrow().as_ref().expect("app").loading())),
+        ),
+        (
+            "app: v then l at once select two characters in VISUAL",
+            Box::new(|_, v| app_keys(v, "vl", &[KeyCode::Char('v'), KeyCode::Char('l')])),
+            Check::Js("window.vl", "\"[true,\\\"he\\\"]\""),
+        ),
+        (
+            "app: v then Esc at once end in Browse with no selection",
+            Box::new(|_, v| app_keys(v, "vesc", &[KeyCode::Esc, KeyCode::Char('v'), KeyCode::Esc])),
+            Check::Js("window.vesc", "\"[false,\\\"\\\"]\""),
+        ),
+        (
+            "app: a scroll ends VISUAL and removes its selection",
+            Box::new(|_, v| {
+                let wheel = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 10,
+                    row: 5,
+                    modifiers: KeyModifiers::NONE,
+                });
+                let k = |c| Event::Key(key(KeyCode::Char(c), KeyModifiers::NONE));
+                app_events(v, "vscroll", &[k('v'), k('l'), wheel]);
+            }),
+            Check::Js("window.vscroll", "\"[false,\\\"\\\"]\""),
+        ),
+        (
+            "app: a side scroll ends VISUAL and removes its selection",
+            Box::new(|_, v| {
+                let wheel = Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollRight,
+                    column: 10,
+                    row: 5,
+                    modifiers: KeyModifiers::NONE,
+                });
+                let k = |c| Event::Key(key(KeyCode::Char(c), KeyModifiers::NONE));
+                app_events(v, "vside", &[k('v'), k('l'), wheel]);
+            }),
+            Check::Js("window.vside", "\"[false,\\\"\\\"]\""),
+        ),
+        (
+            "app: v on a page with no text returns to Browse",
+            Box::new(|_, v| {
+                let page = APP.with(|a| a.borrow().as_ref().expect("app").view());
+                page.evaluate("document.body.textContent=''", |_| {});
+                app_keys(v, "vnone", &[KeyCode::Char('v')]);
+            }),
+            Check::Js("window.vnone", "\"[false,\\\"\\\"]\""),
+        ),
         (
             "frame cost at 1280x800 CSS, scale 1",
             Box::new(|c, v| {
@@ -179,7 +422,14 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
 fn run_step(ctx: Rc<Ctx>, mut list: Vec<(&'static str, Act, Check)>) {
     if list.is_empty() {
         let fails = ctx.fails.get();
-        println!("{}", if fails == 0 { "ALL PASSED".to_string() } else { format!("{fails} FAILED") });
+        println!(
+            "{}",
+            if fails == 0 {
+                "ALL PASSED".to_string()
+            } else {
+                format!("{fails} FAILED")
+            }
+        );
         zebkit::quit();
         return;
     }
@@ -189,7 +439,15 @@ fn run_step(ctx: Rc<Ctx>, mut list: Vec<(&'static str, Act, Check)>) {
     zebkit::after(Duration::from_millis(700), move || {
         let c2 = ctx.clone();
         let report = move |ok: bool, got: String| {
-            println!("  {} {name}{}", if ok { "PASS" } else { "FAIL" }, if ok { String::new() } else { format!(" (got {got})") });
+            println!(
+                "  {} {name}{}",
+                if ok { "PASS" } else { "FAIL" },
+                if ok {
+                    String::new()
+                } else {
+                    format!(" (got {got})")
+                }
+            );
             if !ok {
                 c2.fails.set(c2.fails.get() + 1);
             }
@@ -209,6 +467,17 @@ fn run_step(ctx: Rc<Ctx>, mut list: Vec<(&'static str, Act, Check)>) {
                 let ok = f(&ctx);
                 report(ok, "false".into());
                 run_step(ctx.clone(), list);
+            }
+            Check::Until(cond) => {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                wait_until(
+                    cond,
+                    deadline,
+                    Box::new(move |ok| {
+                        report(ok, "still loading".into());
+                        run_step(ctx, list);
+                    }),
+                );
             }
             Check::None => run_step(ctx.clone(), list),
         }
@@ -245,41 +514,50 @@ fn measure(frame: zebkit::offscreen::Frame) {
 pub fn run() -> i32 {
     let ctx = Rc::new(Ctx::default());
     let c = ctx.clone();
-    zebkit::run_with_args(["zweb", "--headless", "--zebkit-cookie-storage=file"], move || {
-        let timeout_ctx = c.clone();
-        zebkit::after(Duration::from_secs(60), move || {
-            timeout_ctx.fails.set(timeout_ctx.fails.get() + 1);
-            println!("TIMEOUT");
-            zebkit::quit();
-        });
-        let view = View::new_offscreen(None, 800, 600, 1.0).expect("off-screen view");
-        view.set_focus(true);
-        view.set_dialog_policy(DialogPolicy::Hold);
-        let k = c.clone();
-        view.on_caret(move |r| k.caret.set(r.is_some()));
-        let k = c.clone();
-        view.on_popup(move |r| k.popup.set(r.is_some()));
-        let k = c.clone();
-        view.on_window_open(move |_v, _| k.opened.set(true));
-        let k = c.clone();
-        view.on_dialog(move |d| k.dialog.set(Some(d.id)));
-        let k = c.clone();
-        view.on_frame(move |f| {
-            if f.layer() == zebkit::offscreen::Layer::View && f.width() >= 1280 && k.measure.replace(false) {
-                measure(f);
-            }
-        });
-        let started = Rc::new(Cell::new(false));
-        let k = c.clone();
-        view.on_load(move |e, _| {
-            if e == LoadEvent::Finished && !started.replace(true) {
-                println!("zweb self-test");
-                run_step(k.clone(), steps());
-            }
-        });
-        let url = format!("data:text/html;base64,{}", base64::engine::general_purpose::STANDARD.encode(PAGE));
-        view.load_url(&url);
-        *c.view.borrow_mut() = Some(view);
-    });
+    zebkit::run_with_args(
+        ["zweb", "--headless", "--zebkit-cookie-storage=file"],
+        move || {
+            let timeout_ctx = c.clone();
+            zebkit::after(Duration::from_secs(60), move || {
+                timeout_ctx.fails.set(timeout_ctx.fails.get() + 1);
+                println!("TIMEOUT");
+                zebkit::quit();
+            });
+            let view = View::new_offscreen(None, 800, 600, 1.0).expect("off-screen view");
+            view.set_focus(true);
+            view.set_dialog_policy(DialogPolicy::Hold);
+            let k = c.clone();
+            view.on_caret(move |r| k.caret.set(r.is_some()));
+            let k = c.clone();
+            view.on_popup(move |r| k.popup.set(r.is_some()));
+            let k = c.clone();
+            view.on_window_open(move |_v, _| k.opened.set(true));
+            let k = c.clone();
+            view.on_dialog(move |d| k.dialog.set(Some(d.id)));
+            let k = c.clone();
+            view.on_frame(move |f| {
+                if f.layer() == zebkit::offscreen::Layer::View
+                    && f.width() >= 1280
+                    && k.measure.replace(false)
+                {
+                    measure(f);
+                }
+            });
+            let started = Rc::new(Cell::new(false));
+            let k = c.clone();
+            view.on_load(move |e, _| {
+                if e == LoadEvent::Finished && !started.replace(true) {
+                    println!("zweb self-test");
+                    run_step(k.clone(), steps());
+                }
+            });
+            let url = format!(
+                "data:text/html;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(PAGE)
+            );
+            view.load_url(&url);
+            *c.view.borrow_mut() = Some(view);
+        },
+    );
     ctx.fails.get()
 }
