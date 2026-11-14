@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/engineersamuel/webskiff/compare/v0.6.0...v0.7.0) (2026-11-14)
+
+
+### Features
+
+* add Ctrl-O / Ctrl-I jumplist across pages and tabs ([#39](https://github.com/engineersamuel/webskiff/issues/39)) ([4d5fb6e](https://github.com/engineersamuel/webskiff/commit/4d5fb6ea5c91a0f0d9b078cd2ce26607e991b261))
+
 ## [0.6.0](https://github.com/engineersamuel/webskiff/compare/v0.5.0...v0.6.0) (2026-11-14)
 
 
