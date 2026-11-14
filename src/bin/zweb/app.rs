@@ -698,6 +698,7 @@ impl App {
         if let Some(t) = self.tabs.get(self.active) {
             t.view.request_frame();
         }
+        self.draw_tab_picker();
         self.draw();
     }
 
