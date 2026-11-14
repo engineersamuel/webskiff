@@ -22,8 +22,10 @@ actions! {
     EditAddress => "edit_address", "Edit the current address";
     NewTab => "new_tab", "Open an address or web search in a new tab";
     CloseTab => "close_tab", "Close the current tab";
+    ReopenTab => "reopen_tab", "Reopen the last closed tab";
     NextTab => "next_tab", "Next browser tab";
     PreviousTab => "previous_tab", "Previous browser tab";
+    AlternateTab => "alternate_tab", "Switch to the previously active tab";
     Find => "find", "Find text in this page";
     NextMatch => "next_match", "Next page match";
     PreviousMatch => "previous_match", "Previous page match";
@@ -534,6 +536,28 @@ mod tests {
         ] {
             assert_eq!(action(&config, Scope::Visual, key), Some(want), "{key}");
         }
+    }
+
+    #[test]
+    fn default_reopen_and_alternate_tab_bindings() {
+        let config = Config::parse("").unwrap();
+        assert_eq!(action(&config, Scope::Browse, "X"), Some(Action::ReopenTab));
+        assert_eq!(
+            action(&config, Scope::Browse, "^"),
+            Some(Action::AlternateTab)
+        );
+        assert_eq!(
+            action(&config, Scope::Global, "Ctrl-Shift-T"),
+            Some(Action::ReopenTab)
+        );
+        let event = |c, m| config.action(Scope::Global, KeyEvent::new(KeyCode::Char(c), m));
+        let ctrl_shift = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+        assert_eq!(event('T', ctrl_shift), Some(Action::ReopenTab));
+        assert_eq!(event('t', ctrl_shift), Some(Action::ReopenTab));
+        assert_eq!(
+            config.action(Scope::Browse, KeyEvent::from(KeyCode::Char('^'))),
+            Some(Action::AlternateTab)
+        );
     }
 
     #[test]

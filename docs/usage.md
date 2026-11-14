@@ -13,9 +13,10 @@ The old `CMD` prompt is a sign that an outdated executable is running.
 ## Navigation
 
 `o` opens an address or web search; `O` edits the current address. `t` opens
-a new tab. Addresses also accept existing local files, relative to the working
-directory, absolute paths, and `file://` URLs. Quote paths containing spaces.
-Missing explicit paths report an error.
+a new tab. `X` (Ctrl-Shift-T) reopens the last closed tab, up to 10;
+`^` switches to the previously active tab. Addresses also accept existing
+local files, relative to the working directory, absolute paths, and `file://`
+URLs. Quote paths containing spaces. Missing explicit paths report an error.
 
 In the `o` and `t` prompts, the best match from your page history shows dim
 after the cursor. Tab replaces the text with the best match; Tab again shows the

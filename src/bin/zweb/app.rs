@@ -358,6 +358,10 @@ pub struct App {
     tabs: Vec<Tab>,
     active: usize,
     active_id: Rc<Cell<u64>>,
+    /// The id of the tab that was active before the current one.
+    previous_id: Option<u64>,
+    /// URLs of closed tabs, oldest first.
+    closed: VecDeque<String>,
     next_id: u64,
     mode: Mode,
     prompt: Option<Prompt>,
@@ -413,6 +417,8 @@ impl App {
             tabs: Vec::new(),
             active: 0,
             active_id: Rc::new(Cell::new(0)),
+            previous_id: None,
+            closed: VecDeque::new(),
             next_id: 1,
             mode: Mode::Browse,
             prompt: None,
@@ -647,6 +653,10 @@ impl App {
         self.mode = Mode::Browse;
         self.clear_hints();
         let tab = &self.tabs[index];
+        let old_id = self.active_id.get();
+        if old_id != tab.id && self.index_of(old_id).is_some() {
+            self.previous_id = Some(old_id);
+        }
         self.active_id.set(tab.id);
         tab.view.set_focus(true);
         self.renderer.layout.lock().unwrap().popup = None;
@@ -664,8 +674,26 @@ impl App {
             return self.quit();
         }
         let tab = self.tabs.remove(self.active);
+        push_closed(&mut self.closed, tab.url.clone());
         tab.view.close();
         self.switch(self.active.min(self.tabs.len() - 1));
+    }
+
+    fn reopen_tab(&mut self) {
+        match self.closed.pop_back() {
+            Some(url) => self.open_tab(Some(&url), None),
+            None => {
+                self.message = "no closed tab".into();
+                self.draw();
+            }
+        }
+    }
+
+    fn alternate_tab(&mut self) {
+        let index = self.previous_id.and_then(|id| self.index_of(id));
+        if let Some(index) = index.filter(|&i| i != self.active) {
+            self.switch(index);
+        }
     }
 
     fn tab(&self) -> &Tab {
@@ -1194,6 +1222,8 @@ impl App {
             Action::PreviousTab => {
                 self.switch((self.active + self.tabs.len() - 1) % self.tabs.len())
             }
+            Action::ReopenTab => self.reopen_tab(),
+            Action::AlternateTab => self.alternate_tab(),
             Action::Tab1 => self.switch(0),
             Action::Tab2 => self.switch(1),
             Action::Tab3 => self.switch(2),
@@ -2175,6 +2205,20 @@ impl App {
     }
 }
 
+/// How many closed tabs can be reopened.
+const CLOSED_MAX: usize = 10;
+
+/// Remembers a closed tab's URL, newest last; drops the oldest past `CLOSED_MAX`.
+fn push_closed(stack: &mut VecDeque<String>, url: String) {
+    if url.is_empty() {
+        return;
+    }
+    stack.push_back(url);
+    if stack.len() > CLOSED_MAX {
+        stack.pop_front();
+    }
+}
+
 /// Resolves an address as a URL, an existing local file, a host, or a search.
 fn load_history() -> History {
     let path = crate::data_dir().join("history.tsv");
@@ -2437,6 +2481,22 @@ mod tests {
                 "{key}: {js}"
             );
         }
+    }
+
+    #[test]
+    fn closed_tabs_keep_the_ten_newest_and_reopen_newest_first() {
+        use super::push_closed;
+        let mut stack = std::collections::VecDeque::new();
+        push_closed(&mut stack, String::new());
+        assert!(stack.is_empty());
+        for i in 1..=11 {
+            push_closed(&mut stack, format!("https://example.com/{i}"));
+        }
+        assert_eq!(stack.len(), 10);
+        for i in (2..=11).rev() {
+            assert_eq!(stack.pop_back(), Some(format!("https://example.com/{i}")));
+        }
+        assert!(stack.is_empty());
     }
 
     #[test]
