@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/engineersamuel/webskiff/compare/v0.2.0...v0.3.0) (2026-11-14)
+
+
+### Features
+
+* caret visual mode with yank ([#31](https://github.com/engineersamuel/webskiff/issues/31)) ([6b565b5](https://github.com/engineersamuel/webskiff/commit/6b565b59febf96e30f5a616ba739865e2b882b6d))
+
 ## [0.2.0](https://github.com/engineersamuel/webskiff/compare/v0.1.0...v0.2.0) (2026-11-14)
 
 
