@@ -395,7 +395,8 @@ def source_brew_formula(repository, commit, output):
     ENV["WEBSKIFF_BUILD_COMMIT"] = "{commit}"
     ENV["CARGO_HTTP_USER_AGENT"] = "{USER_AGENT}"
     system "cargo", "install", *std_cargo_args(root: libexec), "--bin", "webskiff"
-    (libexec/"bin").install "target/release/zebkit"
+    # Cargo's build-script layout can change; install the verified resource directly.
+    (libexec/"bin/zebkit").install "engine/Zebkit.framework"
     bin.write_exec_script libexec/"bin/webskiff"
     (bin/"webskiff").chmod 0755
     pkgshare.install "config.example.toml", "LICENSE", "THIRD_PARTY_NOTICES.md"
