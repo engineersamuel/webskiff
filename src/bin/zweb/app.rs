@@ -1380,7 +1380,10 @@ impl App {
         match self.bindings.resolve(Scope::Browse, k, prefix) {
             Binding::Action(action) => {
                 // Kitty: the action's frame places the rows under the popup.
-                if prefix.is_some() && self.popup_rows.get() > 0 && self.renderer.gfx != crate::render::Gfx::Blocks {
+                if prefix.is_some()
+                    && self.popup_rows.get() > 0
+                    && self.renderer.gfx != crate::render::Gfx::Blocks
+                {
                     self.popup_rows.set(0);
                     self.renderer.uncover_by_frame();
                 }
@@ -2563,11 +2566,23 @@ impl App {
                 }
             }
         }
-        let bg = Color::Rgb { r: 40, g: 40, b: 48 };
+        let bg = Color::Rgb {
+            r: 40,
+            g: 40,
+            b: 48,
+        };
         for (i, line) in lines.iter().take(n as usize).enumerate() {
             let pad = (l.cols as usize).saturating_sub(line.width() + 1);
             let row = l.top + l.rows - n + i as u16;
-            let _ = queue!(out, cursor::MoveTo(0, row), SetBackgroundColor(bg), Print(" "), Print(line), Print(" ".repeat(pad)), ResetColor);
+            let _ = queue!(
+                out,
+                cursor::MoveTo(0, row),
+                SetBackgroundColor(bg),
+                Print(" "),
+                Print(line),
+                Print(" ".repeat(pad)),
+                ResetColor
+            );
         }
     }
 
@@ -3288,7 +3303,10 @@ mod jumps_tests {
 
 /// One line per next key: the key, then what it does, clipped to `width`.
 fn prefix_popup_lines(entries: &[(String, &str)], width: usize) -> Vec<String> {
-    entries.iter().map(|(key, description)| clip(&format!("{key}  {description}"), width)).collect()
+    entries
+        .iter()
+        .map(|(key, description)| clip(&format!("{key}  {description}"), width))
+        .collect()
 }
 
 fn display_char(c: char) -> char {
@@ -3598,9 +3616,18 @@ mod tests {
     #[test]
     fn prefix_popup_lists_each_key_and_description_clipped() {
         use super::prefix_popup_lines;
-        let entries = [("g".to_string(), "Go to the top"), ("i".to_string(), "Focus the first text field")];
-        assert_eq!(prefix_popup_lines(&entries, 80), ["g  Go to the top", "i  Focus the first text field"]);
-        assert_eq!(prefix_popup_lines(&entries, 10), ["g  Go to t", "i  Focus t"]);
+        let entries = [
+            ("g".to_string(), "Go to the top"),
+            ("i".to_string(), "Focus the first text field"),
+        ];
+        assert_eq!(
+            prefix_popup_lines(&entries, 80),
+            ["g  Go to the top", "i  Focus the first text field"]
+        );
+        assert_eq!(
+            prefix_popup_lines(&entries, 10),
+            ["g  Go to t", "i  Focus t"]
+        );
         assert!(prefix_popup_lines(&[], 80).is_empty());
     }
 

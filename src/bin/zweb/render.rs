@@ -560,7 +560,9 @@ impl Rows {
     }
 
     fn has_blurry_tiles(&self) -> bool {
-        (0..self.shown.len()).any(|t| !self.covered(t) && self.shown[t].is_some_and(|h| self.refine.contains_key(&h)))
+        (0..self.shown.len()).any(|t| {
+            !self.covered(t) && self.shown[t].is_some_and(|h| self.refine.contains_key(&h))
+        })
     }
 
     fn wake_deadline(&self) -> Option<Instant> {
@@ -636,10 +638,25 @@ impl Rows {
         out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
         // Covered: sent now, placed when uncovered.
         let show = !self.covered(t);
-        let place = if show { format!("p={},c={cols},r=1,C=1,q=2", t + 1) } else { "q=2".to_string() };
+        let place = if show {
+            format!("p={},c={cols},r=1,C=1,q=2", t + 1)
+        } else {
+            "q=2".to_string()
+        };
         let size = rgb.len();
         self.cache.insert(hash, Cached { id, used: self.clock, size, src: src.clone() });
-        let part = Part { before: std::mem::take(out), w: bx1 - bx0, h: by1 - by0, inner, src, id, show, place, rgb, hash };
+        let part = Part {
+            before: std::mem::take(out),
+            w: bx1 - bx0,
+            h: by1 - by0,
+            inner,
+            src,
+            id,
+            show,
+            place,
+            rgb,
+            hash,
+        };
         self.bytes += size;
         // Delete the previous placement only after the new image is sent.
         if show {
@@ -943,7 +960,9 @@ impl Renderer {
             rows.set_cover(out, layout, pending.cover_peak, kitty);
         }
         match pending.cover {
-            Some(0) if pending.uncover_by_frame && rows.cover > 0 => rows.uncover_at = Some(Instant::now() + UNCOVER_WAIT),
+            Some(0) if pending.uncover_by_frame && rows.cover > 0 => {
+                rows.uncover_at = Some(Instant::now() + UNCOVER_WAIT)
+            }
             Some(n) => rows.set_cover(out, layout, n, kitty),
             None => {}
         }
@@ -1002,7 +1021,9 @@ impl Renderer {
         let mut n = 0;
         let mut keep = HashMap::new();
         for (hash, (w, h, rgb, src)) in std::mem::take(&mut rows.refine) {
-            let tiles: Vec<usize> = (0..rows.shown.len()).filter(|&t| rows.shown[t] == Some(hash) && !rows.covered(t)).collect();
+            let tiles: Vec<usize> = (0..rows.shown.len())
+                .filter(|&t| rows.shown[t] == Some(hash) && !rows.covered(t))
+                .collect();
             let Some(old) = rows.cache.get(&hash).map(|c| c.id) else { continue };
             if tiles.is_empty() {
                 // Not on screen: sharp if it comes back (cached as blurry).
@@ -1378,7 +1399,14 @@ impl Renderer {
         let progressive =
             self.gfx == Gfx::KittyDirect && std::env::var_os("ZWEB_NOPROGRESSIVE").is_none();
         let encode = |p: &Part| {
-            let keys = |w: usize, h: usize, src: &str| format!("a={},f=24,s={w},v={h},i={},{src}{}", if p.show { 'T' } else { 't' }, p.id, p.place);
+            let keys = |w: usize, h: usize, src: &str| {
+                format!(
+                    "a={},f=24,s={w},v={h},i={},{src}{}",
+                    if p.show { 'T' } else { 't' },
+                    p.id,
+                    p.place
+                )
+            };
             if progressive && p.inner.3 >= 2 {
                 let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
                 z.write_all(&p.rgb).unwrap();
@@ -1765,12 +1793,24 @@ mod tests {
 
     /// Five cached rows on screen, one tile each.
     fn five_cached_rows() -> (Layout, Rows) {
-        let layout = Layout { rows: 5, cols: 16, ..Layout::default() };
+        let layout = Layout {
+            rows: 5,
+            cols: 16,
+            ..Layout::default()
+        };
         let mut rows = Rows::new();
         rows.shown = (10..15).map(Some).collect();
         rows.fixed = vec![false; 5];
         for id in 10..16 {
-            rows.cache.insert(id as u64, Cached { id, used: 0, size: 3, src: String::new() });
+            rows.cache.insert(
+                id as u64,
+                Cached {
+                    id,
+                    used: 0,
+                    size: 3,
+                    src: String::new(),
+                },
+            );
         }
         (layout, rows)
     }
@@ -1783,7 +1823,10 @@ mod tests {
         rows.set_cover(&mut out, &layout, 0, true);
         assert!(out.is_empty(), "no popup, no output");
         rows.set_cover(&mut out, &layout, 2, true);
-        assert_eq!(out, b"\x1b_Ga=d,d=i,i=13,p=4,q=2\x1b\\\x1b_Ga=d,d=i,i=14,p=5,q=2\x1b\\");
+        assert_eq!(
+            out,
+            b"\x1b_Ga=d,d=i,i=13,p=4,q=2\x1b\\\x1b_Ga=d,d=i,i=14,p=5,q=2\x1b\\"
+        );
         out.clear();
         rows.set_cover(&mut out, &layout, 0, true);
         assert_eq!(rows.shown, before);
@@ -1800,7 +1843,10 @@ mod tests {
         out.clear();
         renderer.show_prediction(&mut out, &layout, &mut rows, 1);
         assert!(rows.prediction.is_some());
-        assert_eq!(rows.shown, vec![Some(11), Some(12), Some(13), Some(14), Some(BLANK)]);
+        assert_eq!(
+            rows.shown,
+            vec![Some(11), Some(12), Some(13), Some(14), Some(BLANK)]
+        );
     }
 
     #[test]
@@ -1816,15 +1862,23 @@ mod tests {
         let mut pixels = Pixels {
             #[cfg(target_os = "macos")]
             surface: None,
-            base: [].as_ptr(), stride: 0, w: 0, h: 0,
+            base: [].as_ptr(),
+            stride: 0,
+            w: 0,
+            h: 0,
         };
-        let (parts, sent, moved) = renderer.draw_tiles(&mut pixels, &layout, &mut rows, &hashes, &mut out);
+        let (parts, sent, moved) =
+            renderer.draw_tiles(&mut pixels, &layout, &mut rows, &hashes, &mut out);
         assert!(parts.is_empty());
         assert_eq!((sent, moved, rows.cover, rows.uncover_at), (0, 1, 0, None));
-        assert_eq!(out, concat!(
-            "\x1b[4;1H\x1b_Ga=p,i=13,p=4,c=16,r=1,C=1,q=2\x1b\\",
-            "\x1b[5;1H\x1b_Ga=p,i=15,p=5,c=16,r=1,C=1,q=2\x1b\\",
-        ).as_bytes());
+        assert_eq!(
+            out,
+            concat!(
+                "\x1b[4;1H\x1b_Ga=p,i=13,p=4,c=16,r=1,C=1,q=2\x1b\\",
+                "\x1b[5;1H\x1b_Ga=p,i=15,p=5,c=16,r=1,C=1,q=2\x1b\\",
+            )
+            .as_bytes()
+        );
     }
 
     #[test]
