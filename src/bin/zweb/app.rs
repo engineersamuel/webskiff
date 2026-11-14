@@ -1,7 +1,7 @@
 //! The browser: tabs, modes, commands, and the two text rows around the page.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,6 +42,9 @@ const YANK_MAX: usize = 100_000;
 const HOME: &str = "https://duckduckgo.com/";
 /// Cell rows per scroll step (j, k, the wheel).
 const STEP_ROWS: f32 = 3.0;
+/// Code keys of hints.js (`__zwebHopKeys`): hop's letters, or digits for
+/// filtered hints. Index: `hint_filter as usize`.
+const HINT_KEYS: [&str; 2] = ["", "1234567890"];
 
 // ---- Messages: every callback queues one; `drain` handles them in order. ----
 
@@ -77,13 +80,18 @@ pub enum Msg {
         tab: u64,
         dialog: Dialog,
     },
+    /// A reply for hint session `session` (`start_hints`).
     Hints {
         tab: u64,
+        session: u64,
         reply: HintReply,
     },
-    /// Hints read ahead (hints.js `__zwebHopPrepare()`).
+    /// Hints read ahead (hints.js `__zwebHopPrepare()`), started at page
+    /// commit count `page` (`ReadAhead`).
     Prepared {
         tab: u64,
+        page: u64,
+        filter: bool,
         json: String,
     },
     Found {
@@ -285,6 +293,137 @@ struct Hint {
     y: f32,
     href: Option<String>,
     edit: bool,
+    text: String,
+}
+
+/// The hints whose text contains `text` (any case) and whose code starts
+/// with `typed`, by index.
+fn filter_hints(hints: &[Hint], text: &str, typed: &str) -> Vec<usize> {
+    let text = text.to_lowercase();
+    (0..hints.len())
+        .filter(|&i| {
+            hints[i].key.starts_with(typed) && hints[i].text.to_lowercase().contains(&text)
+        })
+        .collect()
+}
+
+/// A filtered-hints key (`g f`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FilterKey {
+    Char(char),
+    Back,
+    Accept,
+}
+
+/// What a filtered-hints key does: follow a hint, or show these.
+#[derive(Debug, PartialEq)]
+enum FilterStep {
+    Pick(usize),
+    Show(Vec<usize>),
+}
+
+/// Filtered hints' input: the keys taken, in order; digits pick codes,
+/// other characters filter by text. Keys typed before the targets arrive
+/// wait in `queue`.
+#[derive(Default)]
+struct HintFilter {
+    keys: String,
+    queue: Vec<FilterKey>,
+}
+
+impl HintFilter {
+    fn text(&self) -> String {
+        self.keys.chars().filter(|c| !c.is_ascii_digit()).collect()
+    }
+
+    fn left(&self, hints: &[Hint]) -> Vec<usize> {
+        let code: String = self.keys.chars().filter(char::is_ascii_digit).collect();
+        filter_hints(hints, &self.text(), &code)
+    }
+
+    /// Applies `key`; with no targets yet, queues it.
+    fn key(&mut self, hints: &[Hint], key: FilterKey) -> Option<FilterStep> {
+        if hints.is_empty() {
+            self.queue.push(key);
+            return None;
+        }
+        // Only an accepted character follows the one hint left.
+        let accepted = match key {
+            FilterKey::Accept => return self.left(hints).first().map(|&i| FilterStep::Pick(i)),
+            FilterKey::Back => {
+                self.keys.pop();
+                false
+            }
+            FilterKey::Char(c) => {
+                self.keys.push(c);
+                let none = self.left(hints).is_empty();
+                if none {
+                    self.keys.pop();
+                }
+                !none
+            }
+        };
+        let left = self.left(hints);
+        Some(if accepted && left.len() == 1 {
+            FilterStep::Pick(left[0])
+        } else {
+            FilterStep::Show(left)
+        })
+    }
+
+    /// The targets arrived: applies the queued keys in order, up to a pick.
+    fn ready(&mut self, hints: &[Hint]) -> Option<FilterStep> {
+        let queue = std::mem::take(&mut self.queue);
+        if hints.is_empty() {
+            return None;
+        }
+        let mut step = None;
+        for key in queue {
+            step = self.key(hints, key);
+            if matches!(step, Some(FilterStep::Pick(_))) {
+                break;
+            }
+        }
+        step
+    }
+}
+
+/// Hints read ahead for a tab: its id, hints.js's id, the overlay, the hints.
+type Prepared = (u64, String, Hop, Vec<Hint>);
+
+/// Hints read ahead, one for each set of code keys (letters, digits).
+#[derive(Default)]
+struct ReadAhead {
+    /// Page commits of each tab: a read keeps its tab's count at start.
+    pages: HashMap<u64, u64>,
+    slots: [Option<Prepared>; 2],
+}
+
+impl ReadAhead {
+    /// A page committed in `tab`: what was read of its page before is old.
+    fn committed(&mut self, tab: u64) {
+        *self.pages.entry(tab).or_default() += 1;
+        for p in &mut self.slots {
+            if p.as_ref().is_some_and(|p| p.0 == tab) {
+                *p = None;
+            }
+        }
+    }
+
+    fn page(&self, tab: u64) -> u64 {
+        self.pages.get(&tab).copied().unwrap_or(0)
+    }
+
+    /// The reply of a read started at `page`; one started before a page
+    /// commit in its tab is of the page before.
+    fn read(&mut self, page: u64, tab: u64, filter: bool, json: &str) {
+        if page != self.page(tab) {
+            return;
+        }
+        if let (Some(id), Some(hop), hints) = parse_hints(json) {
+            self.slots[filter as usize] = Some((tab, id, hop, hints));
+        }
+    }
 }
 
 /// hints.js's result, a JSON string of JSON: its id, overlay and hints.
@@ -309,6 +448,7 @@ fn parse_hints(json: &str) -> (Option<String>, Option<Hop>, Vec<Hint>) {
                     y: h["y"].as_f64().unwrap_or(0.0) as f32,
                     href: h["href"].as_str().map(Into::into),
                     edit: h["edit"].as_bool().unwrap_or(false),
+                    text: h["t"].as_str().unwrap_or("").into(),
                 })
                 .collect()
         })
@@ -366,9 +506,14 @@ pub struct App {
     mode: Mode,
     prompt: Option<Prompt>,
     hints: Vec<Hint>,
-    /// Hints read ahead for a tab: its id, hints.js's id, the overlay, the hints.
-    prepared: Option<(u64, String, Hop, Vec<Hint>)>,
+    /// Hints read ahead, for each of HINT_KEYS.
+    prepared: ReadAhead,
     hint_typed: String,
+    /// Filtered hints (`g f`), and their input.
+    hint_filter: bool,
+    filter: HintFilter,
+    /// Filtered hints: the overlay with every code, shown in part.
+    hint_hop: Option<Hop>,
     /// The dim layer's colour of the hints shown.
     hint_dim: Option<[u8; 4]>,
     hint_new_tab: bool,
@@ -376,6 +521,10 @@ pub struct App {
     visual_session: u64,
     /// Hints were shown in this session: read them ahead from now on.
     hints_used: bool,
+    /// `g f` was used: its hints (digit codes) are read ahead too.
+    filter_used: bool,
+    /// Bumped by each `start_hints`: replies of older sessions are dropped.
+    hint_session: u64,
     find: String,
     find_generation: u64,
     message: String,
@@ -423,12 +572,17 @@ impl App {
             mode: Mode::Browse,
             prompt: None,
             hints: Vec::new(),
-            prepared: None,
+            prepared: ReadAhead::default(),
             hint_typed: String::new(),
+            hint_filter: false,
+            filter: HintFilter::default(),
+            hint_hop: None,
             hint_dim: None,
             hint_new_tab: false,
             visual_session: 0,
             hints_used: false,
+            filter_used: false,
+            hint_session: 0,
             find: String::new(),
             find_generation: 0,
             message,
@@ -737,7 +891,11 @@ impl App {
                 self.message = "opened a new tab".into();
             }
             Msg::Dialog { tab, dialog } => self.dialog_opened(tab, dialog),
-            Msg::Hints { tab, reply } => self.hint_reply_received(tab, reply),
+            Msg::Hints {
+                tab,
+                session,
+                reply,
+            } => self.hint_reply_received(tab, session, reply),
             Msg::Found {
                 tab,
                 generation,
@@ -745,7 +903,12 @@ impl App {
                 result,
             } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
-            Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
+            Msg::Prepared {
+                tab,
+                page,
+                filter,
+                json,
+            } => self.prepared.read(page, tab, filter, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
             Msg::Focused { ok } => self.focused(ok),
             Msg::EditText { tab, json } => self.edit_text(tab, json),
@@ -813,15 +976,13 @@ impl App {
             self.saver.changed(Instant::now());
         }
         tab.url = url;
-        if self.prepared.as_ref().is_some_and(|p| p.0 == tab.id) {
-            self.prepared = None;
-        }
+        self.prepared.committed(tab.id);
         if i == self.active {
             if self.mode == Mode::Hint {
-                self.renderer.hop(None);
+                self.reset_hints();
             }
             if self.mode == Mode::Visual {
-                tab.view.evaluate(COLLAPSE_JS, |_| {});
+                self.tabs[i].view.evaluate(COLLAPSE_JS, |_| {});
             }
             if matches!(self.mode, Mode::Hint | Mode::Visual) {
                 self.mode = Mode::Browse;
@@ -899,7 +1060,10 @@ impl App {
         self.draw();
     }
 
-    fn hint_reply_received(&mut self, tab: u64, reply: HintReply) {
+    fn hint_reply_received(&mut self, tab: u64, session: u64, reply: HintReply) {
+        if session != self.hint_session {
+            return;
+        }
         match reply {
             HintReply::Targets(json) => self.hints_received(tab, json),
             HintReply::Image(json) => self.hint_image_received(tab, &json),
@@ -914,8 +1078,7 @@ impl App {
         // A JSON string of the JSON list, of {png, list}, or of {id}: the
         // hints read ahead are still right (hints.js).
         let v = json.ok().map(|j| parse_hints(&j)).unwrap_or_default();
-        let prepared = self
-            .prepared
+        let prepared = self.prepared.slots[self.hint_filter as usize]
             .take()
             .filter(|p| p.0 == tab && v.0.as_deref() == Some(p.1.as_str()));
         let hop = match prepared {
@@ -933,7 +1096,15 @@ impl App {
             self.message = "no links here".into();
         } else if let Some(hop) = hop {
             self.hint_dim = Some(hop.dim);
+            if self.hint_filter {
+                self.hint_hop = Some(hop.clone());
+            }
             self.renderer.hop(Some(hop));
+        }
+        if self.hint_filter {
+            if let Some(step) = self.filter.ready(&self.hints) {
+                return self.filter_step(step);
+            }
         }
         self.draw();
     }
@@ -965,26 +1136,34 @@ impl App {
         {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
-            crate::trace!("hints prepare");
-            self.view().evaluate(
-                &format!("{}{lib};__zwebHopPrepare()", self.hints_mode()),
-                move |r| {
-                    crate::trace!(
-                        "hints prepared {}",
-                        r.as_ref()
-                            .map_or_else(|e| e.to_string(), |j| format!("{} B", j.len()))
-                    );
-                    if let Ok(json) = r {
-                        send(Msg::Prepared { tab, json });
-                    }
-                },
-            );
-        }
-    }
-
-    fn hints_prepared(&mut self, tab: u64, json: &str) {
-        if let (Some(id), Some(hop), hints) = parse_hints(json) {
-            self.prepared = Some((tab, id, hop, hints));
+            let page = self.prepared.page(tab);
+            for filter in [false, true]
+                .into_iter()
+                .filter(|&f| !f || self.filter_used)
+            {
+                crate::trace!("hints prepare");
+                self.view().evaluate(
+                    &format!(
+                        "{}{lib};__zwebHopPrepare(__zwebHopKeys)",
+                        self.hints_mode(filter)
+                    ),
+                    move |r| {
+                        crate::trace!(
+                            "hints prepared {}",
+                            r.as_ref()
+                                .map_or_else(|e| e.to_string(), |j| format!("{} B", j.len()))
+                        );
+                        if let Ok(json) = r {
+                            send(Msg::Prepared {
+                                tab,
+                                page,
+                                filter,
+                                json,
+                            });
+                        }
+                    },
+                );
+            }
         }
     }
 
@@ -1280,8 +1459,9 @@ impl App {
                 });
             }
             Action::Insert => self.mode = Mode::Insert,
-            Action::Hints => self.start_hints(false),
-            Action::HintsNewTab => self.start_hints(true),
+            Action::Hints => self.start_hints(false, false),
+            Action::HintsNewTab => self.start_hints(true, false),
+            Action::HintsFilter => self.start_hints(false, true),
             Action::CopyUrl => self.copy_url(),
             Action::Visual => self.start_visual(),
             Action::ToggleImages => self.toggle_placeholders(),
@@ -1531,53 +1711,66 @@ impl App {
 
     // ---- Hints ----
 
-    fn start_hints(&mut self, new_tab: bool) {
+    fn start_hints(&mut self, new_tab: bool, filter: bool) {
         self.hints_used = true;
+        self.filter_used |= filter;
         self.mode = Mode::Hint;
         self.hint_new_tab = new_tab;
+        self.hint_filter = filter;
         self.hint_typed.clear();
         self.hints.clear();
-        let id = self.tab().id;
-        let kept = self
-            .prepared
+        self.filter = HintFilter::default();
+        self.hint_session += 1;
+        let (id, session) = (self.tab().id, self.hint_session);
+        let kept = self.prepared.slots[filter as usize]
             .as_ref()
             .filter(|p| p.0 == id)
             .map_or("", |p| p.1.as_str());
         let js = format!(
             "{}window.__zwebHopKept={};{HINTS_JS}",
-            self.hints_mode(),
+            self.hints_mode(filter),
             serde_json::to_string(kept).unwrap()
         );
         self.view().evaluate(&js, move |r| {
             send(Msg::Hints {
                 tab: id,
+                session,
                 reply: HintReply::Targets(r.map_err(|e| e.to_string())),
             })
         });
     }
 
     /// With Kitty graphics, hints.js gives the overlay as a terminal image:
-    /// showing it needs no new page frame.
-    fn hints_mode(&self) -> String {
+    /// showing it needs no new page frame. And the code keys.
+    fn hints_mode(&self, filter: bool) -> String {
+        let keys = format!("window.__zwebHopKeys='{}';", HINT_KEYS[filter as usize]);
         if self.renderer.gfx == crate::render::Gfx::Blocks {
-            return String::new();
+            return keys;
         }
         let l = self.layout();
-        format!("window.__zwebHopGrid=[{},{}];", l.cols, l.rows)
+        format!("{keys}window.__zwebHopGrid=[{},{}];", l.cols, l.rows)
     }
 
     fn clear_hints(&mut self) {
+        self.reset_hints();
+        self.schedule_prepare();
+    }
+
+    /// Removes the hints, and reads none ahead: a page that just committed
+    /// is read when it has loaded.
+    fn reset_hints(&mut self) {
         if !self.hints.is_empty() {
             self.renderer.hop(None);
         }
         self.hint_dim = None;
         self.hints.clear();
         self.hint_typed.clear();
+        self.filter = HintFilter::default();
+        self.hint_hop = None;
         if let Some(t) = self.tabs.get(self.active) {
             t.view
                 .evaluate("window.__zwebHop && __zwebHop.clear()", |_| {});
         }
-        self.schedule_prepare();
     }
 
     /// Keeps the codes that start with `typed`, showing what is left of them.
@@ -1586,11 +1779,12 @@ impl App {
             "window.__zwebHop && __zwebHop.show({})",
             serde_json::to_string(typed).unwrap()
         );
-        let id = self.tab().id;
+        let (id, session) = (self.tab().id, self.hint_session);
         self.view().evaluate(&js, move |r| {
             if let Some(json) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
                 send(Msg::Hints {
                     tab: id,
+                    session,
                     reply: HintReply::Image(json),
                 });
             }
@@ -1616,6 +1810,9 @@ impl App {
     }
 
     fn hint_key(&mut self, k: KeyEvent) {
+        if self.hint_filter {
+            return self.filter_key(k);
+        }
         self.edit_hint(k);
         if self.mode != Mode::Hint {
             return self.draw();
@@ -1627,21 +1824,7 @@ impl App {
         if matches.is_empty() && !self.hints.is_empty() {
             self.hint_typed.pop();
         } else if matches.len() == 1 && self.hints[matches[0]].key == typed {
-            let h = &self.hints[matches[0]];
-            let (x, y, href, edit) = (h.x, h.y, h.href.clone(), h.edit);
-            self.mode = Mode::Browse;
-            self.clear_hints();
-            if self.hint_new_tab {
-                if let Some(href) = href {
-                    self.open_tab(Some(&href), None);
-                    return;
-                }
-            }
-            self.last_click = (Instant::now(), x, y, 1);
-            self.click(x, y, 1);
-            if edit {
-                self.mode = Mode::Insert;
-            }
+            return self.pick_hint(matches[0]);
         } else {
             self.show_hints(&self.hint_typed);
         }
@@ -1723,6 +1906,73 @@ impl App {
             self.renderer.write(&bytes);
         }
         self.message = message;
+        self.draw();
+    }
+
+    /// Filtered hints: other characters filter by text, digits by code;
+    /// Enter picks the first left. Labels never change, and no new image is
+    /// made: the overlay is placed again with only the codes left.
+    fn filter_key(&mut self, k: KeyEvent) {
+        let key = match self.bindings.action(Scope::Hint, k) {
+            Some(Action::Cancel) => {
+                self.mode = Mode::Browse;
+                self.clear_hints();
+                return self.draw();
+            }
+            Some(Action::Backspace) => FilterKey::Back,
+            Some(Action::Accept) => FilterKey::Accept,
+            None => match input::character(k) {
+                Some(c) => FilterKey::Char(c),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Some(step) = self.filter.key(&self.hints, key) {
+            self.filter_step(step);
+        }
+    }
+
+    fn filter_step(&mut self, step: FilterStep) {
+        let left = match step {
+            FilterStep::Pick(i) => return self.pick_hint(i),
+            FilterStep::Show(left) => left,
+        };
+        if let Some(hop) = &self.hint_hop {
+            let cells = left
+                .iter()
+                .filter_map(|&i| hop.cells.get(i).copied())
+                .collect();
+            self.renderer.hop(Some(Hop {
+                cells,
+                ..hop.clone()
+            }));
+        } else {
+            let js = format!(
+                "window.__zwebHop && __zwebHop.pick({})",
+                serde_json::to_string(&left).unwrap()
+            );
+            self.view().evaluate(&js, |_| {});
+        }
+        self.draw();
+    }
+
+    /// Follows hint `i`: a click at it, or its link in a new tab.
+    fn pick_hint(&mut self, i: usize) {
+        let h = &self.hints[i];
+        let (x, y, href, edit) = (h.x, h.y, h.href.clone(), h.edit);
+        self.mode = Mode::Browse;
+        self.clear_hints();
+        if self.hint_new_tab {
+            if let Some(href) = href {
+                self.open_tab(Some(&href), None);
+                return;
+            }
+        }
+        self.last_click = (Instant::now(), x, y, 1);
+        self.click(x, y, 1);
+        if edit {
+            self.mode = Mode::Insert;
+        }
         self.draw();
     }
 
@@ -2086,6 +2336,14 @@ impl App {
         let room = cols.saturating_sub(tag.len() + stats.len() + 1);
         let (body, dim) = match &self.prompt {
             Some(p) => p.body(room),
+            None if self.mode == Mode::Hint && self.hint_filter => (
+                format!(
+                    " filter: {}  {} matches",
+                    self.filter.text(),
+                    self.filter.left(&self.hints).len()
+                ),
+                String::new(),
+            ),
             None if self.mode == Mode::Hint => {
                 (format!(" type a hint: {}", self.hint_typed), String::new())
             }
@@ -2374,6 +2632,127 @@ fn clip_start(s: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::to_url;
+
+    #[test]
+    fn hint_filter_returns_original_indices_of_text_matches_ignoring_case() {
+        let list = r#"[{"k":"1","t":"Home Page"},{"k":"2","t":"About"},{"k":"3","t":"HOMEWORK"},{"k":"4"}]"#;
+        let (_, _, hints) = super::parse_hints(&serde_json::to_string(list).unwrap());
+        let filter = |text, typed| super::filter_hints(&hints, text, typed);
+        assert_eq!(filter("home", ""), [0, 2]);
+        assert_eq!(filter("hOmE", ""), [0, 2]);
+        assert_eq!(filter("e p", ""), [0]);
+        assert_eq!(filter("zzz", ""), [] as [usize; 0]);
+        assert_eq!(filter("", ""), [0, 1, 2, 3]);
+        assert_eq!(filter("home", "3"), [2]);
+    }
+
+    fn filter_hints_of(list: &str) -> Vec<super::Hint> {
+        super::parse_hints(&serde_json::to_string(list).unwrap()).2
+    }
+
+    #[test]
+    fn hints_read_ahead_before_a_page_commit_are_not_kept_when_they_come_after_it() {
+        let read = |id: &str| {
+            serde_json::to_string(&format!(
+                r#"{{"id":"{id}","png":"P","cells":[],"list":[{{"k":"a"}}]}}"#
+            ))
+            .unwrap()
+        };
+        let kept = |r: &super::ReadAhead| {
+            r.slots
+                .each_ref()
+                .map(|s| s.as_ref().map(|p| (p.0, p.1.clone())))
+        };
+        let mut r = super::ReadAhead::default();
+        let before = r.page(7);
+        r.read(before, 7, false, &read("old:1"));
+        assert_eq!(kept(&r), [Some((7, "old:1".into())), None]);
+        // A page commits in tab 7; replies started before it come late.
+        r.committed(7);
+        assert_eq!(kept(&r), [None, None]);
+        r.read(before, 7, false, &read("old:2"));
+        r.read(before, 7, true, &read("old:3"));
+        assert_eq!(kept(&r), [None, None]);
+        // Reads of the new page, letters and digits, are kept.
+        let now = r.page(7);
+        r.read(now, 7, false, &read("new:1"));
+        r.read(now, 7, true, &read("new:2"));
+        assert_eq!(
+            kept(&r),
+            [Some((7, "new:1".into())), Some((7, "new:2".into()))]
+        );
+        // A late reply of the page before does not replace them.
+        r.read(before, 7, true, &read("old:4"));
+        assert_eq!(
+            kept(&r),
+            [Some((7, "new:1".into())), Some((7, "new:2".into()))]
+        );
+        // A commit in another tab: this tab's read is still right.
+        r.committed(8);
+        r.read(now, 7, true, &read("new:3"));
+        assert_eq!(
+            kept(&r),
+            [Some((7, "new:1".into())), Some((7, "new:3".into()))]
+        );
+    }
+
+    #[test]
+    fn filter_keys_typed_while_targets_load_apply_in_order_when_they_arrive() {
+        use super::{FilterKey::*, FilterStep::*, HintFilter};
+        let hints = filter_hints_of(
+            r#"[{"k":"1","t":"link one"},{"k":"2","t":"lion"},{"k":"3","t":"link two"}]"#,
+        );
+        let mut f = HintFilter::default();
+        for c in "lin".chars() {
+            assert_eq!(f.key(&[], Char(c)), None);
+        }
+        assert_eq!(f.ready(&hints), Some(Show(vec![0, 2])));
+        let mut f = HintFilter::default();
+        for c in "lio".chars() {
+            f.key(&[], Char(c));
+        }
+        assert_eq!(f.ready(&hints), Some(Pick(1)));
+        // A queued Enter picks the first match once there are targets.
+        let mut f = HintFilter::default();
+        f.key(&[], Char('k'));
+        f.key(&[], Accept);
+        assert_eq!(f.ready(&hints), Some(Pick(0)));
+        // No targets at all: a queued Enter picks nothing.
+        let mut f = HintFilter::default();
+        f.key(&[], Accept);
+        assert_eq!(f.ready(&[]), None);
+        // Nothing queued: nothing to do.
+        assert_eq!(HintFilter::default().ready(&hints), None);
+    }
+
+    #[test]
+    fn filter_backspace_removes_the_last_key_typed() {
+        use super::{FilterKey::*, FilterStep::*, HintFilter};
+        let hints = filter_hints_of(
+            r#"[{"k":"11","t":"lake"},{"k":"12","t":"lime"},{"k":"21","t":"love"}]"#,
+        );
+        let mut f = HintFilter::default();
+        assert_eq!(f.key(&hints, Char('1')), Some(Show(vec![0, 1])));
+        assert_eq!(f.key(&hints, Char('l')), Some(Show(vec![0, 1])));
+        // Backspace removes `l`, not `1`: still only codes starting with 1.
+        assert_eq!(f.key(&hints, Back), Some(Show(vec![0, 1])));
+        assert_eq!(f.key(&hints, Back), Some(Show(vec![0, 1, 2])));
+    }
+
+    #[test]
+    fn filter_follows_the_only_hint_left_only_on_an_accepted_key_or_enter() {
+        use super::{FilterKey::*, FilterStep::*, HintFilter};
+        let hints = filter_hints_of(r#"[{"k":"1","t":"solo"}]"#);
+        let mut f = HintFilter::default();
+        assert_eq!(f.key(&hints, Back), Some(Show(vec![0])));
+        assert_eq!(f.key(&hints, Char('z')), Some(Show(vec![0])));
+        assert_eq!(f.key(&hints, Accept), Some(Pick(0)));
+        assert_eq!(f.key(&hints, Char('s')), Some(Pick(0)));
+        // Queued keys too.
+        let mut f = HintFilter::default();
+        f.key(&[], Back);
+        assert_eq!(f.ready(&hints), Some(Show(vec![0])));
+    }
 
     #[test]
     fn opens_existing_relative_and_absolute_files() {

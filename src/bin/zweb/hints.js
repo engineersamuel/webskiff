@@ -2,8 +2,11 @@
 // element's first characters are replaced by its code, in the page's own
 // font. `__zwebHop.show(typed)` keeps the codes that start with `typed`
 // and shows what is left of them; `__zwebHop.clear()` removes it all.
-// Returns one JSON string: [{k, x, y, href, edit}], (x, y) the element's
-// centre in viewport CSS pixels.
+// Returns one JSON string: [{k, x, y, href, edit, t}], (x, y) the element's
+// centre in viewport CSS pixels, t its text (at most 64 characters).
+// `window.__zwebHopKeys` gives the code keys (digits for filtered hints);
+// unset or empty, hop's letters. In the page, `__zwebHop.pick(indices)`
+// shows only those targets' whole codes.
 //
 // With `window.__zwebHopGrid = [cols, rows]` set (Kitty graphics), nothing
 // goes in the page: zweb shows the hints as terminal images over it, a dim
@@ -18,28 +21,30 @@
 // PNG) is done ahead, when the page is still: `__zwebHopPrepare()` returns
 // that result, and zweb keeps it, and says so in `__zwebHopKept`. `f` then returns
 // only {id} while that is still right: the page did not move, and did not
-// change, or changed but its hints read again are the same.
+// change, or changed but its hints read again are the same. One is kept for
+// each set of code keys.
 window.__zwebHopPrepare = window.__zwebHopPrepare || (() => {
-  let changed = true;
-  new MutationObserver(() => { changed = true; })
+  let changes = 0;
+  new MutationObserver(() => { changes++; })
     .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   const stamp = () => [scrollX, scrollY, innerWidth, innerHeight].join();
-  let ready = null, id = 0;
-  const prepare = () => {
-    const r = ready = build(scan());
-    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; changed = false;
+  const ready = {};
+  let id = 0;
+  const prepare = (keys = '') => {
+    const r = ready[keys] = build(scan(keys));
+    r.stamp = stamp(); r.id = `${performance.timeOrigin}:${++id}`; r.changes = changes;
     if (!r.atlas) return null;
     // At once, not by toBlob: a page that draws no frames never calls it
     // back, and zweb's later scripts would wait behind it.
     r.png = png(r.atlas.canvas);
     return JSON.stringify(r.result({ id: r.id }));
   };
-  prepare.take = () => {
-    let r = ready && ready.stamp === stamp() ? ready : null;
-    const sc = r && !changed ? null : scan();
+  prepare.take = (keys = '') => {
+    let r = ready[keys] && ready[keys].stamp === stamp() ? ready[keys] : null;
+    const sc = r && r.changes === changes ? null : scan(keys);
     if (sc && !(r && sc.sig === r.sig)) r = build(sc);
     if (r.atlas && !r.png) r.png = png(r.atlas.canvas);
-    ready = null;
+    delete ready[keys];
     return r;
   };
   return prepare;
@@ -89,12 +94,22 @@ function hintSpot(f, vh, bgOf, pageBg) {
     size: Math.round(h * 0.8) + 'px', family: '-apple-system, sans-serif', bg: bgOf(f.e) || pageBg };
 }
 
-function scan() {
+// What a target says: its text, a field's value or placeholder, else its
+// label, title or image's alt; spaces collapsed, at most 64 characters.
+function textOf(e) {
+  const field = e.tagName === 'INPUT' || e.tagName === 'TEXTAREA' || e.tagName === 'SELECT';
+  const clean = t => (t || '').replace(/\s+/g, ' ').trim();
+  const t = (field ? clean(e.value) || clean(e.placeholder) : clean(e.textContent.slice(0, 1000))) ||
+    clean(e.getAttribute('aria-label')) || clean(e.title) || clean(e.querySelector('img[alt]')?.alt);
+  return t.slice(0, 64);
+}
+
+function scan(keys) {
   const vw = innerWidth, vh = innerHeight;
   const found = targets(vw, vh);
   // Codes from hop's keys, prefix-free; the first targets in reading order
   // get one letter.
-  const keys = 'asdghklqwertyuiopzxcvbnmfj';
+  keys = keys || 'asdghklqwertyuiopzxcvbnmfj';
   let codes = [''], offset = 0;
   while (codes.length - offset < found.length || codes.length === 1) {
     const c = codes[offset++];
@@ -125,7 +140,7 @@ function scan() {
     const tag = f.e.tagName;
     const edit = f.e.isContentEditable || tag === 'TEXTAREA' ||
       (tag === 'INPUT' && !/^(button|submit|reset|checkbox|radio|file|image|range|color)$/i.test(f.e.type));
-    return { k: codes[i], x: f.x, y: f.y, href: f.e.href && f.e.href.length < 2048 ? f.e.href : null, edit };
+    return { k: codes[i], x: f.x, y: f.y, href: f.e.href && f.e.href.length < 2048 ? f.e.href : null, edit, t: textOf(f.e) };
   });
   // All that the overlay and the result are made of.
   const sig = JSON.stringify([list, spots, pageBg]);
@@ -222,13 +237,15 @@ function build({ list, codes, spots, pageBg, colors, dimmed, sig }) {
     'pointer-events:none;z-index:2147483647';
   const g = root.getContext('2d');
   g.scale(px, px);
-  const show = typed => {
+  const draw = parts => {
     g.clearRect(0, 0, vw, vh);
     g.globalAlpha = DIM; g.fillStyle = rgb(pageBg); g.fillRect(0, 0, vw, vh); g.globalAlpha = 1;
-    for (const [i, rest] of left(typed)) paint(g, i, rest, box(i, rest));
+    for (const [i, rest] of parts) paint(g, i, rest, box(i, rest));
   };
+  const show = typed => draw(left(typed));
+  const pick = ids => draw(ids.map(i => [i, codes[i]]));
   show('');
-  return { root, show, list, sig };
+  return { root, show, pick, list, sig };
 }
 
 function png(canvas) {
@@ -238,13 +255,13 @@ function png(canvas) {
 
 (() => {
   if (window.__zwebHop) window.__zwebHop.clear();
-  const r = window.__zwebHopPrepare.take();
-  const { root, show, list } = r;
+  const r = window.__zwebHopPrepare.take(window.__zwebHopKeys);
+  const { root, show, pick, list } = r;
   if (r.atlas) {
     window.__zwebHop = { show: typed => JSON.stringify(show(typed)), clear: () => { delete window.__zwebHop; } };
     return JSON.stringify(r.id && r.id === window.__zwebHopKept ? { id: r.id } : r.result({}));
   }
   document.documentElement.appendChild(root);
-  window.__zwebHop = { show, clear: () => { root.remove(); delete window.__zwebHop; } };
+  window.__zwebHop = { show, pick, clear: () => { root.remove(); delete window.__zwebHop; } };
   return JSON.stringify(list);
 })()

@@ -64,6 +64,7 @@ actions! {
     EditExternal => "edit_external", "Edit the text field in $EDITOR";
     Hints => "hints", "Show link hints";
     HintsNewTab => "hints_new_tab", "Show hints to open in a new tab";
+    HintsFilter => "hints_filter", "Show hints filtered by link text; digits pick";
     CopyUrl => "copy_url", "Copy the current URL";
     ToggleImages => "toggle_images", "Toggle image placeholders";
     ZoomIn => "zoom_in", "Zoom in";
@@ -422,7 +423,7 @@ fn allowed(scope: Scope, action: Action) -> bool {
                 | Yank
         ),
         Scope::Insert => action == Cancel,
-        Scope::Hint => matches!(action, Cancel | Backspace),
+        Scope::Hint => matches!(action, Cancel | Backspace | Accept),
         Scope::Prompt => matches!(
             action,
             Cancel
@@ -644,5 +645,29 @@ mod tests {
         assert!(config
             .help_lines()
             .contains(&"g e: Edit the text field in $EDITOR".to_string()));
+    }
+
+    #[test]
+    fn filtered_hints_default_to_g_f_and_enter_accepts_in_hint_mode() {
+        let named = |name: &str| ACTIONS.iter().find(|a| a.0 == name).map(|a| a.1);
+        let filter = named("hints_filter").expect("hints_filter action");
+        let config = Config::parse("").unwrap();
+        let Binding::Prefix(g) =
+            config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None)
+        else {
+            panic!("missing g prefix");
+        };
+        assert!(matches!(
+            config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('f')), Some(g)),
+            Binding::Action(a) if a == filter
+        ));
+        assert_eq!(action(&config, Scope::Browse, "f"), Some(Action::Hints));
+        assert_eq!(
+            action(&config, Scope::Browse, "F"),
+            Some(Action::HintsNewTab)
+        );
+        assert_eq!(action(&config, Scope::Hint, "Enter"), Some(Action::Accept));
+        assert!(Config::parse("[keys.hint]\naccept = ['Enter']").is_ok());
+        assert!(Config::parse("[keys.browse]\nhints_filter = ['g f']").is_ok());
     }
 }

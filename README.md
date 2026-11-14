@@ -96,6 +96,7 @@ Press **`?`** or **`F1`** for the full list, generated from your configuration.
 | Next / previous browser tab | `]` / `[` | `Ctrl-Tab` / `Ctrl-Shift-Tab` |
 | Previous active tab (`alternate_tab`) | `^` | — |
 | Follow a link with hints | `f` | Mouse click |
+| Filtered hints: letters filter by link text, digits pick fixed labels, Enter picks the first match | `g f` | Mouse click |
 | Select and copy page text | `v`, move, `y` | Mouse select is not possible |
 | Move through page controls | `Tab` / `Shift-Tab` | `Tab` / `Shift-Tab` |
 | Leave page typing mode | `Esc` | `Esc` |
