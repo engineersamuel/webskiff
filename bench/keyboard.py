@@ -171,13 +171,14 @@ def drain():
 
 
 def until(keys, found, label=None, seconds=1.0):
-    """Writes keys after a drain; returns all output up to `found` and 50 ms more.
+    """Writes keys (or calls `keys`) after a drain; returns all output up to
+    `found` and 50 ms more.
 
     The sample is from the key write to the read that completes `found`."""
     drain()
     buffer = bytearray()
     start = time.monotonic()
-    os.write(fd, keys)
+    keys() if callable(keys) else os.write(fd, keys)
     while time.monotonic() < start + seconds:
         if select.select([fd], [], [], 0.002)[0]:
             buffer.extend(os.read(fd, 1 << 20))
@@ -234,6 +235,25 @@ def pick_tab(before, query, target, cancel=False, timed=False):
     after = active_tab(raw)
     assert after == (before if cancel else target), f"active tab {after}, before {before}, target {target}"
     return after
+
+
+def set_size(rows, cols):
+    """Resizes the terminal, 16x32 pixel cells as at start; the browser gets SIGWINCH."""
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, cols * 16, rows * 32))
+
+
+def picker_survives_resize(active, tabs):
+    """A resize with the picker open redraws its rows for the new size, with
+    the page images still hidden; Esc then shows the page again."""
+    until(b"T", lambda raw: bool(picker_rows(raw)))
+    for rows, cols in ((30, 100), (50, 120), (40, 120)):
+        # The last page row (rows - 1) is cleared before the rows are drawn.
+        last = f"\x1b[{rows - 1};1H\x1b[2K".encode()
+        raw = until(lambda: set_size(rows, cols),
+                    lambda raw: last in raw and len(picker_rows(raw)) == tabs, seconds=3)
+        assert not page_image(raw), f"page image shown with the picker open at {rows}x{cols}"
+    raw = until(b"\x1b", page_image)
+    assert active_tab(raw) == active, f"active tab {active_tab(raw)} after Esc, not {active}"
 
 
 def pick_retitled_tab():
@@ -484,6 +504,9 @@ try:
         assert active_tab(open_titled_tab("Quokka")) == 3
         active = pick_tab(3, "zbr", 2)
         pick_tab(active, "", active, cancel=True)
+        # Enter with no text keeps the current tab.
+        pick_tab(active, "", active)
+        picker_survives_resize(active, 3)
         press(b"x")
         press(b"x", expected="\x1b[7m 1")
         pick_retitled_tab()
