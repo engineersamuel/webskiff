@@ -566,7 +566,9 @@ impl Rows {
     }
 
     fn wake_deadline(&self) -> Option<Instant> {
-        let refine = self.has_blurry_tiles().then(|| self.drawn_at + REFINE_AFTER);
+        let refine = self
+            .has_blurry_tiles()
+            .then(|| self.drawn_at + REFINE_AFTER);
         let first = self.prediction.as_ref().map(|pr| pr.deadline).or(refine);
         first.into_iter().chain(self.uncover_at).min()
     }
@@ -644,7 +646,15 @@ impl Rows {
             "q=2".to_string()
         };
         let size = rgb.len();
-        self.cache.insert(hash, Cached { id, used: self.clock, size, src: src.clone() });
+        self.cache.insert(
+            hash,
+            Cached {
+                id,
+                used: self.clock,
+                size,
+                src: src.clone(),
+            },
+        );
         let part = Part {
             before: std::mem::take(out),
             w: bx1 - bx0,
@@ -1024,7 +1034,9 @@ impl Renderer {
             let tiles: Vec<usize> = (0..rows.shown.len())
                 .filter(|&t| rows.shown[t] == Some(hash) && !rows.covered(t))
                 .collect();
-            let Some(old) = rows.cache.get(&hash).map(|c| c.id) else { continue };
+            let Some(old) = rows.cache.get(&hash).map(|c| c.id) else {
+                continue;
+            };
             if tiles.is_empty() {
                 // Not on screen: sharp if it comes back (cached as blurry).
                 keep.insert(hash, (w, h, rgb, src));
