@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/engineersamuel/webskiff/compare/v0.1.0...v0.2.0) (2026-11-14)
+
+
+### Features
+
+* edit the focused text field in $VISUAL/$EDITOR with g e ([#28](https://github.com/engineersamuel/webskiff/issues/28)) ([7ba8255](https://github.com/engineersamuel/webskiff/commit/7ba82554e7ec374daac8facd4d1c4b26274beade))
+
 ## [0.1.0](https://github.com/engineersamuel/webskiff/compare/v0.1.0-beta.5...v0.1.0) (2026-11-13)
 
 
