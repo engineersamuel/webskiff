@@ -2416,7 +2416,8 @@ impl App {
             }
             PromptKind::Find => self.finish_find(accept, text, p.not_found),
             PromptKind::Tabs => {
-                if let Some(i) = self.picked(&text).filter(|_| accept) {
+                // Enter with no text keeps the current tab, as Esc does.
+                if let Some(i) = self.picked(&text).filter(|_| accept && !text.is_empty()) {
                     self.switch(i);
                 }
                 self.show_page();
