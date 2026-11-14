@@ -345,20 +345,24 @@ impl HintFilter {
             self.queue.push(key);
             return None;
         }
-        match key {
+        // Only an accepted character follows the one hint left.
+        let accepted = match key {
             FilterKey::Accept => return self.left(hints).first().map(|&i| FilterStep::Pick(i)),
             FilterKey::Back => {
                 self.keys.pop();
+                false
             }
             FilterKey::Char(c) => {
                 self.keys.push(c);
-                if self.left(hints).is_empty() {
+                let none = self.left(hints).is_empty();
+                if none {
                     self.keys.pop();
                 }
+                !none
             }
-        }
+        };
         let left = self.left(hints);
-        Some(if left.len() == 1 {
+        Some(if accepted && left.len() == 1 {
             FilterStep::Pick(left[0])
         } else {
             FilterStep::Show(left)
