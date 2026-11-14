@@ -32,10 +32,32 @@ if args.config_check:
         "[keys.global]\nfind = ['Ctrl-S']\n"
         "[keys.prompt]\nclear = ['Ctrl-Y']\n"
     )
+# External editor (g e): one script; the file "mode" picks what it does.
+editor_dir = Path(home.name) / "editor"
+edit_tmp = Path(home.name) / "tmp"
+editor_dir.mkdir()
+edit_tmp.mkdir()
+editor = editor_dir / "editor.sh"
+editor.write_text(
+    "#!/bin/sh\n"
+    f"d='{editor_dir}'\n"
+    'touch "$d/ran"\n'
+    'printf %s "$1" > "$d/path"\n'
+    'case "$(cat "$d/mode")" in\n'
+    "  ok) printf 'hello-ext\\n' > \"$1\";;\n"
+    "  fail) printf 'changed\\n' > \"$1\"; exit 3;;\n"
+    "  wait) echo start >> \"$d/log\"; read -r k; printf %s \"$k\" > \"$d/keys\"; echo end >> \"$d/log\";;\n"
+    "esac\n"
+)
+editor.chmod(0o700)
 pid, fd = pty.fork()
 if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 1920, 1280))
     os.environ["HOME"] = home.name
+    if args.check_only:
+        os.environ.pop("VISUAL", None)
+        os.environ["EDITOR"] = str(editor)
+        os.environ["TMPDIR"] = str(edit_tmp)
     if args.check or args.check_only or args.config_check or args.enhanced_check:
         # Stage times in the log printed on a failure; not for timing runs.
         os.environ["ZWEB_TRACE"] = "1"
@@ -75,6 +97,22 @@ def press(keys, label=None, expected=None):
     if expected is not None:
         assert expected.encode() in raw, f"{keys!r}: expected {expected!r}, got {raw[-3000:]!r}"
     return raw
+
+
+def wait_for(expected, seconds=10):
+    output = bytearray()
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and expected.encode() not in output:
+        output.extend(b"".join(data for _, data in pump(0.05)))
+    assert expected.encode() in output, f"expected {expected!r}, got {bytes(output[-3000:])!r}"
+    return bytes(output)
+
+
+def external_edit(mode, expected):
+    (editor_dir / "mode").write_text(mode)
+    press(b"g")
+    os.write(fd, b"e")
+    return wait_for(expected)
 
 
 def percentile(values, fraction):
@@ -211,6 +249,82 @@ try:
         press(b"\x17", expected="keyboard fixture")
         print("KEYBOARD CHECKS PASSED")
         if args.check_only:
+            # g e on a password field: refused, the editor does not run.
+            press(b"gi", expected="focus entry")
+            press(b"\t", expected="focus pw:secret")
+            press(b"\x1b")
+            external_edit("ok", "password field: not edited")
+            assert not (editor_dir / "ran").exists(), "editor ran for a password field"
+            press(b"gi", expected="focus entry")
+            press(b"\t", expected="focus pw:secret")
+            press(b"\x1b")
+            # g e on a read-only field: refused, the editor does not run.
+            press(b"gi", expected="focus entry")
+            press(b"\t", expected="focus pw:secret")
+            press(b"\t", expected="focus ro:fixed")
+            press(b"\x1b")
+            external_edit("ok", "read-only field: not edited")
+            assert not (editor_dir / "ran").exists(), "editor ran for a read-only field"
+            press(b"gi", expected="focus entry")
+            press(b"\t", expected="focus pw:secret")
+            press(b"\t", expected="focus ro:fixed")
+            press(b"\x1b")
+            # g e on a field in a disabled fieldset: refused. Leaving #off
+            # disables its fieldset; a disabled field cannot take focus first.
+            press(b"gi", expected="focus entry")
+            press(b"\t\t\t", expected="focus lg off:kept")
+            press(b"\t", expected="focus off")
+            press(b"\x1b")
+            external_edit("ok", "read-only field: not edited")
+            assert not (editor_dir / "ran").exists(), "editor ran for a disabled field"
+            # A field in the disabled fieldset's first legend is enabled: edited.
+            press(b"gi", expected="focus entry")
+            press(b"\t\t\t", expected="focus lg off:kept")
+            press(b"\x1b")
+            external_edit("ok", "legend:hello-ext")
+            press(b"\x1b")
+            # The editor fails: no write-back, the edit file is deleted.
+            press(b"gi", expected="focus entry")
+            press(b"\x1b")
+            external_edit("fail", "editor failed")
+            edit_file = Path((editor_dir / "path").read_text())
+            assert edit_file.parent == edit_tmp, f"edit file not in TMPDIR: {edit_file}"
+            assert not edit_file.exists(), f"edit file left: {edit_file}"
+            assert not list(edit_tmp.glob("zweb-edit-*")), "zweb edit file left"
+            press(b"gi")
+            press(b"!", expected="input:hello?!")
+            press(b"\x1b")
+            # g e twice in one write: one editor; its keys stay out of the browser.
+            (editor_dir / "mode").write_text("wait")
+            press(b"gege")
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not (editor_dir / "log").exists():
+                pump(0.05)
+            os.write(fd, b"?\r")
+            output = bytearray()
+            while time.monotonic() < deadline and "end" not in (editor_dir / "log").read_text():
+                output.extend(b"".join(data for _, data in pump(0.05)))
+            output.extend(b"".join(data for _, data in pump(1.5)))
+            log = (editor_dir / "log").read_text().split()
+            assert log == ["start", "end"], f"editor runs: {log}"
+            assert b"no change" in output, f"no status after the editor: {bytes(output[-3000:])!r}"
+            assert (editor_dir / "keys").read_text() == "?", "editor did not get its keys"
+            assert b"Webskiff keyboard help" not in output, "browser took the editor's keys"
+            # Success: the text comes back, the terminal is restored.
+            output = external_edit("ok", "input:hello-ext")
+            assert b"\x1b[?1049h" in output, "alternate screen not entered again"
+            assert not list(edit_tmp.glob("zweb-edit-*")), "zweb edit file left"
+            os.write(fd, b"\x11")
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                pump(0.1)
+                done, status = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    break
+            assert done, "browser did not quit"
+            pid = 0
+            assert os.waitstatus_to_exitcode(status) == 0, f"exit status {status}"
+            print("EXTERNAL EDITOR CHECKS PASSED")
             raise SystemExit(0)
 
     # Measure without title-changing test instrumentation or leftover form values.
@@ -265,7 +379,7 @@ except AssertionError:
     raise
 finally:
     try:
-        if os.waitpid(pid, os.WNOHANG)[0] == 0:
+        if pid and os.waitpid(pid, os.WNOHANG)[0] == 0:
             os.write(fd, b"\x11")
             pump(2)
             if os.waitpid(pid, os.WNOHANG)[0] == 0:

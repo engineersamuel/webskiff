@@ -9,6 +9,10 @@
 </style>
 <button id="button" onclick="document.title='button activated'">Activate</button>
 <label for="entry">Text</label><input id="entry" oninput="if(!location.search)document.title='input:'+this.value">
+<input id="pw" type="password" value="secret">
+<input id="ro" readonly value="fixed">
+<fieldset id="fs"><legend><input id="lg" oninput="if(!location.search)document.title='legend:'+this.value"></legend>
+<input id="off" value="kept" onblur="document.getElementById('fs').disabled=true"></fieldset>
 <p id="first">alpha alphabet alpha</p>
 <p id="second">alpha beta gamma</p>
 <p id="browser">Browser Browser</p>
@@ -24,7 +28,7 @@
         : "keyboard fixture";
     });
     document.addEventListener("focusin", event => {
-      document.title = `focus ${event.target.id}`;
+      document.title = `focus ${event.target.id}${event.target.type === "password" || event.target.readOnly ? ":" + event.target.value : ""}${event.target.id === "lg" ? " off:" + document.getElementById("off").value : ""}`;
     });
   }
   for (let i = 0; i < 200; i++) {

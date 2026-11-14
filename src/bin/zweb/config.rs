@@ -59,6 +59,7 @@ actions! {
     Tab9 => "tab_9", "Select browser tab 9";
     Insert => "insert", "Send keys to the page";
     FocusInput => "focus_input", "Focus the first text field";
+    EditExternal => "edit_external", "Edit the text field in $EDITOR";
     Hints => "hints", "Show link hints";
     HintsNewTab => "hints_new_tab", "Show hints to open in a new tab";
     CopyUrl => "copy_url", "Copy the current URL";
@@ -545,5 +546,25 @@ mod tests {
             ),
             Binding::Action(Action::FocusInput)
         ));
+    }
+
+    #[test]
+    fn g_e_edits_the_text_field_externally() {
+        let config = Config::parse("").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("missing g prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('e')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::EditExternal)
+        ));
+        assert!(config
+            .help_lines()
+            .contains(&"g e: Edit the text field in $EDITOR".to_string()));
     }
 }
