@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/engineersamuel/webskiff/compare/v0.3.0...v0.4.0) (2026-11-14)
+
+
+### Features
+
+* reopen closed tab and alternate tab ([#33](https://github.com/engineersamuel/webskiff/issues/33)) ([fdb8f0f](https://github.com/engineersamuel/webskiff/commit/fdb8f0f4fa2d7e24f246c3748a6d01064db39ca5))
+
 ## [0.3.0](https://github.com/engineersamuel/webskiff/compare/v0.2.0...v0.3.0) (2026-11-14)
 
 
