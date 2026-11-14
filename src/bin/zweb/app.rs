@@ -304,6 +304,8 @@ impl Tab {
 
     fn cancel_restore(&mut self) {
         if self.nav.restoring() {
+            self.view.stop();
+            self.loading = false;
             self.nav.clear_pending();
             self.load_generation.set(self.load_generation.get() + 1);
         }
@@ -832,9 +834,7 @@ impl App {
         let index = index.min(self.tabs.len() - 1);
         let old = self.tabs.get_mut(self.active).map(|old| {
             if record && index != self.active && old.nav.restoring() {
-                old.view.stop();
                 old.cancel_restore();
-                old.loading = false;
             }
             old.view.set_focus(false);
             if self.mode == Mode::Visual {

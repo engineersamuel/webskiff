@@ -10,6 +10,8 @@
   committed page instead of the unfinished destination.
 - Ignore queued commits from restores cancelled by Back, Forward, Reload, Stop,
   or opening a URL; Stop also clears the loading indicator.
+- Stop cancelled jumplist restores and clear the loading indicator even when
+  Back or Forward has no engine history entry.
 
 ## [0.6.0](https://github.com/engineersamuel/webskiff/compare/v0.5.0...v0.6.0) (2026-11-14)
 
