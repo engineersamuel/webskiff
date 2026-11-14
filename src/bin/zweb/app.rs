@@ -1243,7 +1243,7 @@ impl App {
 
     fn focused(&mut self, ok: bool) {
         if ok {
-            self.mode = Mode::Insert;
+            enter_insert(&mut self.mode, &mut self.pending_key);
         } else {
             self.message = "no text field here".into();
         }
@@ -2134,7 +2134,7 @@ impl App {
         self.last_click = (Instant::now(), x, y, 1);
         self.click(x, y, 1);
         if edit {
-            self.mode = Mode::Insert;
+            enter_insert(&mut self.mode, &mut self.pending_key);
         }
         self.draw();
     }
@@ -3320,6 +3320,11 @@ fn display_char(c: char) -> char {
     }
 }
 
+/// The page put the caret in a text field without a key: keys type into it.
+fn enter_insert(mode: &mut Mode, _pending: &mut Option<Stroke>) {
+    *mode = Mode::Insert;
+}
+
 fn clip(s: &str, width: usize) -> String {
     let mut out = String::new();
     let mut w = 0;
@@ -3722,5 +3727,20 @@ mod tests {
         ] {
             assert_eq!(url_root(url).as_deref(), want, "{url}");
         }
+    }
+
+    #[test]
+    fn entering_insert_from_the_page_drops_a_pending_prefix() {
+        use super::{enter_insert, Mode};
+        use crate::config::Stroke;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut mode = Mode::Browse;
+        let mut pending = Some(Stroke::from_event(KeyEvent::from(KeyCode::Char('g'))));
+        enter_insert(&mut mode, &mut pending);
+        assert!(mode == Mode::Insert);
+        assert!(
+            pending.is_none(),
+            "a `g` typed before the page focused a field stays pending"
+        );
     }
 }
