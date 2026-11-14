@@ -1384,15 +1384,35 @@ impl App {
         true
     }
 
-    fn navigation_command(&self, action: Action) -> bool {
+    fn navigation_command(&mut self, action: Action) -> bool {
         match action {
             Action::Back => self.view().go_back(),
             Action::Forward => self.view().go_forward(),
             Action::Reload => self.view().reload(),
             Action::Stop => self.view().stop(),
+            Action::UrlUp => self.go_url(
+                url_up(&self.tab().url),
+                "already at the top of this address",
+            ),
+            Action::UrlRoot => self.go_url(
+                url_root(&self.tab().url),
+                "already at the root of this address",
+            ),
             _ => return false,
         }
         true
+    }
+
+    fn go_url(&mut self, url: Option<String>, missing: &str) {
+        match url {
+            Some(url) => self.load_here(url),
+            None => self.message = missing.into(),
+        }
+    }
+
+    fn load_here(&mut self, url: String) {
+        self.tab().view.load_url(&url);
+        self.tabs[self.active].url = url;
     }
 
     fn tab_command(&mut self, action: Action) -> bool {
@@ -2209,8 +2229,7 @@ impl App {
                 if p.kind == PromptKind::OpenTab {
                     self.open_tab(Some(&url), None);
                 } else {
-                    self.tab().view.load_url(&url);
-                    self.tabs[self.active].url = url;
+                    self.load_here(url);
                 }
             }
             PromptKind::Find => self.finish_find(accept, text, p.not_found),
@@ -2586,6 +2605,40 @@ pub fn yank(text: &str) -> (Option<Vec<u8>>, String) {
     )
 }
 
+/// `scheme://host[:port]` and the rest, for hierarchical URLs only.
+fn split_url(url: &str) -> Option<(&str, &str)> {
+    let (scheme, rest) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !valid || !rest.starts_with("//") {
+        return None;
+    }
+    let start = scheme.len() + 3;
+    let end = url[start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| start + i);
+    Some(url.split_at(end))
+}
+
+/// One level up: drop the query and fragment, else the last path segment.
+fn url_up(url: &str) -> Option<String> {
+    let (base, path) = split_url(url)?;
+    if let Some(i) = path.find(['?', '#']) {
+        return Some(format!("{base}{}", &path[..i]));
+    }
+    let path = path.strip_suffix('/').unwrap_or(path);
+    let cut = path.rfind('/')?;
+    Some(format!("{base}{}", &path[..=cut]))
+}
+
+/// `scheme://host[:port]/`, unless the URL is already that.
+fn url_root(url: &str) -> Option<String> {
+    let (base, _) = split_url(url)?;
+    let root = format!("{base}/");
+    (root != url).then_some(root)
+}
+
 pub fn home() -> &'static str {
     HOME
 }
@@ -2944,5 +2997,43 @@ mod tests {
     #[test]
     fn yank_of_an_empty_selection_writes_nothing() {
         assert_eq!(super::yank(""), (None, "nothing selected".to_string()));
+    }
+
+    #[test]
+    fn url_up_strips_query_and_fragment_then_drops_a_segment() {
+        use super::url_up;
+        for (url, want) in [
+            ("https://a.com/x/y/z", Some("https://a.com/x/y/")),
+            ("https://a.com/x/y/", Some("https://a.com/x/")),
+            ("https://a.com/x?q=1", Some("https://a.com/x")),
+            ("https://a.com/x#f", Some("https://a.com/x")),
+            ("https://a.com/", None),
+            ("https://a.com:8443/x", Some("https://a.com:8443/")),
+            ("https://a.com/x/", Some("https://a.com/")),
+            ("file:///tmp/a.html", Some("file:///tmp/")),
+            ("about:blank", None),
+            ("data:text/html,a/b", None),
+            ("data:text/plain,https://a.com/x/y", None),
+            ("blob:https://a.com/1234-uuid", None),
+            ("about:blank#https://a.com/x", None),
+        ] {
+            assert_eq!(url_up(url).as_deref(), want, "{url}");
+        }
+    }
+
+    #[test]
+    fn url_root_keeps_scheme_host_and_port() {
+        use super::url_root;
+        for (url, want) in [
+            ("https://a.com:8443/x/y?q=1#f", Some("https://a.com:8443/")),
+            ("about:blank", None),
+            ("https://a.com/", None),
+            ("https://a.com?q=1", Some("https://a.com/")),
+            ("data:text/plain,https://a.com/x/y", None),
+            ("blob:https://a.com/1234-uuid", None),
+            ("about:blank#https://a.com/x", None),
+        ] {
+            assert_eq!(url_root(url).as_deref(), want, "{url}");
+        }
     }
 }

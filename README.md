@@ -98,6 +98,8 @@ Press **`?`** or **`F1`** for the full list, generated from your configuration.
 | Follow a link with hints | `f` | Mouse click |
 | Filtered hints: letters filter by link text, digits pick fixed labels, Enter picks the first match | `g f` | Mouse click |
 | Select and copy page text | `v`, move, `y` | Mouse select is not possible |
+| Up one address level / address root | `g u` / `g U` | — |
+| Back / forward in history | `H` / `L`, `g [` / `g ]` | `Alt-Left` / `Alt-Right` |
 | Move through page controls | `Tab` / `Shift-Tab` | `Tab` / `Shift-Tab` |
 | Leave page typing mode | `Esc` | `Esc` |
 | Show keyboard help | `?` | `F1` |
