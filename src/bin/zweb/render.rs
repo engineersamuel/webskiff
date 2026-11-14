@@ -939,7 +939,7 @@ impl Renderer {
 
     fn apply_cover(&self, pending: &Pending, layout: &Layout, rows: &mut Rows, out: &mut Vec<u8>) {
         let kitty = self.gfx != Gfx::Blocks;
-        if pending.cover_peak > rows.cover {
+        if !kitty && pending.cover_peak > rows.cover {
             rows.set_cover(out, layout, pending.cover_peak, kitty);
         }
         match pending.cover {
