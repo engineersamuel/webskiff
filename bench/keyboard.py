@@ -157,7 +157,9 @@ def wait_for_fixture(text=b"keyboard fixture", keys=None):
         if not data:
             break
         output.extend(data)
-        if text in output:
+        # Startup keys need an image after the title; jump checks only need their marker.
+        title = output.find(text)
+        if title >= 0 and (keys is not None or b"a=T" in output[title:]):
             return
     raise AssertionError(f"{text!r} did not appear: {bytes(output[-3000:])!r}")
 
