@@ -1528,6 +1528,7 @@ impl App {
     }
 
     fn load_here(&mut self, url: String) {
+        self.tabs[self.active].cancel_restore();
         self.tab().view.load_url(&url);
         self.tabs[self.active].nav.open(url);
     }
@@ -2346,7 +2347,6 @@ impl App {
                 if p.kind == PromptKind::OpenTab {
                     self.open_tab(Some(&url), None);
                 } else {
-                    self.tabs[self.active].cancel_restore();
                     self.load_here(url);
                 }
             }
@@ -3082,6 +3082,43 @@ mod jumps_tests {
     #[test]
     fn app_jumps_open_cancels_queued_restore() {
         cancelled_restore_ignores_queued_commit(None, "load https://example.com/d");
+    }
+
+    #[test]
+    fn app_jumps_address_navigation_cancels_queued_restore() {
+        for (action, expected) in [
+            (Action::UrlUp, "https://example.com/a/"),
+            (Action::UrlRoot, "https://example.com/"),
+        ] {
+            let mut app = app_with_tabs(&["https://example.com/old"]);
+            for url in ["https://example.com/old", "https://example.com/a/b"] {
+                visit(&mut app, 0, url);
+            }
+            assert!(app.navigation_command(Action::JumpBack));
+            let generation = app.tab().load_generation.get();
+            app.load_event(
+                1,
+                generation,
+                LoadEvent::Started,
+                "https://example.com/old".into(),
+            );
+            let stale = committed(&app, 0, "https://example.com/old");
+            assert!(app.navigation_command(action));
+            assert_eq!(
+                &*app.tab().view.calls.borrow(),
+                &["load https://example.com/old", "stop", &format!("load {expected}")]
+            );
+            assert_eq!(app.tab().load_generation.get(), generation + 1);
+            assert!(!app.tab().nav.restoring());
+            assert!(!app.tab().loading);
+            assert_eq!(app.tab().url(), expected);
+            let jumps = format!("{:?}", app.jumps);
+            app.handle(stale);
+            assert_eq!(app.tab().url(), expected);
+            assert_eq!(format!("{:?}", app.jumps), jumps);
+            visit(&mut app, 0, expected);
+            assert_eq!(app.tab().nav.current().url, expected);
+        }
     }
 
     #[test]
