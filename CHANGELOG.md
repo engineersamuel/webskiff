@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/engineersamuel/webskiff/compare/v0.4.0...v0.5.0) (2026-11-14)
+
+
+### Features
+
+* text-filtered hints on g f ([#35](https://github.com/engineersamuel/webskiff/issues/35)) ([52c3a86](https://github.com/engineersamuel/webskiff/commit/52c3a8601f19d73962df63fa74d7b3e1c2f61458))
+
 ## [0.4.0](https://github.com/engineersamuel/webskiff/compare/v0.3.0...v0.4.0) (2026-11-14)
 
 
