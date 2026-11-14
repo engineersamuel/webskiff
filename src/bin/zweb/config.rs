@@ -896,6 +896,7 @@ mod tests {
         assert_eq!(
             config.continuations(Scope::Browse, g),
             [
+                ("e".to_string(), "Edit the text field in $EDITOR"),
                 ("g".to_string(), "Go to the top"),
                 ("i".to_string(), "Focus the first text field")
             ]
