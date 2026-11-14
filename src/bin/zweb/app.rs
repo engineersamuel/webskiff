@@ -937,10 +937,10 @@ impl App {
         }
         if i == self.active {
             if self.mode == Mode::Hint {
-                self.renderer.hop(None);
+                self.clear_hints();
             }
             if self.mode == Mode::Visual {
-                tab.view.evaluate(COLLAPSE_JS, |_| {});
+                self.tabs[i].view.evaluate(COLLAPSE_JS, |_| {});
             }
             if matches!(self.mode, Mode::Hint | Mode::Visual) {
                 self.mode = Mode::Browse;
@@ -1677,6 +1677,7 @@ impl App {
         self.hint_filter = filter;
         self.hint_typed.clear();
         self.hints.clear();
+        self.filter = HintFilter::default();
         self.hint_session += 1;
         let (id, session) = (self.tab().id, self.hint_session);
         let kept = self.prepared[filter as usize]
