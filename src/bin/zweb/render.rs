@@ -166,8 +166,10 @@ fn half_pixel(rgb: &[u8], w: usize, h: usize, x: usize, y: usize) -> [u8; 3] {
 const BG_ID: u32 = 2;
 /// Not the hash of any row: a row shown as background.
 const BLANK: u64 = u64::MAX;
-/// Raw pixel bytes of row images the terminal may keep for reuse.
-const CACHE_BYTES: usize = 64 << 20;
+/// Raw pixel bytes of all our images the terminal may hold: row tiles, the
+/// popup and the hint atlas. A terminal that goes over its own limit drops
+/// images we still place (herdr's terminal holds 64 MiB), so stay under it.
+const CACHE_BYTES: usize = 48 << 20;
 /// How long frames that do not show the whole scroll yet are held back.
 const SETTLE: Duration = Duration::from_millis(150);
 /// Terminal columns per tile, about.
@@ -404,6 +406,9 @@ struct Rows {
     drawn_at: Instant,
     /// Hash of the hint overlay the terminal holds: shown again, it is only placed.
     hop_sent: Option<u64>,
+    /// Pixel bytes the terminal holds for the popup and the hint atlas.
+    popup_bytes: usize,
+    hop_bytes: usize,
     /// Bottom page rows left to text: no tiles are placed there.
     cover: u16,
     /// Uncovered, but left for the next page frame to place, until then.
@@ -430,6 +435,8 @@ impl Rows {
             refine: HashMap::new(),
             drawn_at: Instant::now(),
             hop_sent: None,
+            popup_bytes: 0,
+            hop_bytes: 0,
             cover: 0,
             uncover_at: None,
         }
@@ -446,6 +453,8 @@ impl Rows {
         self.tape.clear();
         self.refine.clear();
         self.hop_sent = None;
+        self.popup_bytes = 0;
+        self.hop_bytes = 0;
     }
 
     /// The cell row, first column and width in columns of tile `t`.
@@ -700,6 +709,8 @@ impl Rows {
         let hash = xxhash_rust::xxh3::xxh3_64(hop.png.as_bytes());
         if self.hop_sent != Some(hash) {
             self.hop_sent = Some(hash);
+            self.hop_bytes = png_rgba_bytes(&hop.png);
+            self.evict(out);
             let chunks: Vec<&[u8]> = hop.png.as_bytes().chunks(4096).collect();
             for (i, chunk) in chunks.iter().enumerate() {
                 let m = u8::from(i + 1 < chunks.len());
@@ -729,8 +740,12 @@ impl Rows {
         }
     }
 
+    /// Deletes the least recently used tiles not on screen, when our images
+    /// are over CACHE_BYTES. Written before new images, so the terminal
+    /// never holds more.
     fn evict(&mut self, out: &mut Vec<u8>) {
-        if self.bytes <= CACHE_BYTES || self.prediction.is_some() {
+        let overlays = self.popup_bytes + self.hop_bytes;
+        if self.bytes + overlays <= CACHE_BYTES || self.prediction.is_some() {
             return;
         }
         let on_screen: std::collections::HashSet<u64> =
@@ -743,7 +758,7 @@ impl Rows {
             .collect();
         old.sort_unstable();
         for (_, h) in old {
-            if self.bytes <= CACHE_BYTES * 3 / 4 {
+            if self.bytes + overlays <= CACHE_BYTES * 3 / 4 {
                 break;
             }
             let c = self.cache.remove(&h).unwrap();
@@ -752,6 +767,20 @@ impl Rows {
             out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", c.id).as_bytes());
         }
     }
+}
+
+/// Pixel bytes of a base64 PNG once the terminal decodes it to RGBA (IHDR
+/// width and height), or 0 if it is not a PNG.
+fn png_rgba_bytes(b64: &str) -> usize {
+    let head = b64.get(..32).unwrap_or("");
+    let Ok(png) = base64::engine::general_purpose::STANDARD.decode(head) else {
+        return 0;
+    };
+    if png.len() < 24 || &png[12..16] != b"IHDR" {
+        return 0;
+    }
+    let be = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+    be(16) * be(20) * 4
 }
 
 /// Tiles of `base` scrolled by `shift` rows (down > 0), fixed tiles kept,
@@ -908,7 +937,7 @@ impl Renderer {
                 write_out(&out);
             }
             if let (Some(frame), Some(_)) = (pending.popup, layout.popup) {
-                self.draw_popup(&frame, &layout);
+                self.draw_popup(&frame, &layout, &mut rows);
             }
             let on_screen = rows.has_blurry_tiles();
             if rows.prediction.is_none() && on_screen && rows.drawn_at.elapsed() >= REFINE_AFTER {
@@ -960,6 +989,7 @@ impl Renderer {
                 rows.shown.fill(None);
             } else {
                 out.extend_from_slice(format!("\x1b_Ga=d,d=I,i={POPUP_ID},q=2\x1b\\").as_bytes());
+                rows.popup_bytes = 0;
             }
         }
     }
@@ -1250,8 +1280,14 @@ impl Renderer {
         rows.bg = [br, bg, bb];
         let (parts, sent, moved) = self.draw_tiles(&mut pixels, layout, rows, &hashes, &mut out);
         drop(pixels);
+        // Room first: the new tiles are counted, and on screen, so kept.
+        let mut evicted = Vec::new();
+        rows.evict(&mut evicted);
         out = self.encode_parts(parts, out, rows);
-        rows.evict(&mut out);
+        if !evicted.is_empty() {
+            evicted.extend_from_slice(&out);
+            out = evicted;
+        }
         if out.is_empty() {
             return;
         }
@@ -1362,7 +1398,7 @@ impl Renderer {
         all
     }
 
-    fn draw_popup(&self, frame: &Frame, layout: &Layout) {
+    fn draw_popup(&self, frame: &Frame, layout: &Layout, cache: &mut Rows) {
         let (w, h) = (frame.width(), frame.height());
         if w == 0 || h == 0 || layout.cols == 0 || layout.rows == 0 {
             return;
@@ -1392,6 +1428,8 @@ impl Renderer {
             ),
             Gfx::KittyDirect | Gfx::KittyShm => {
                 let rgb = pixels.rgb(0, 0, w as usize, h as usize);
+                cache.popup_bytes = rgb.len();
+                cache.evict(&mut out);
                 out.extend_from_slice(
                     format!("\x1b[{};{}H", layout.top + row + 1, col + 1).as_bytes(),
                 );
@@ -2058,5 +2096,36 @@ mod tests {
     #[test]
     fn matches_skips_blank() {
         assert_eq!(matches(&[1, 2, 3], &[1, BLANK, 4]), 1);
+    }
+
+    #[test]
+    fn evict_counts_overlays_and_keeps_tiles_on_screen() {
+        let (_, mut rows) = five_cached_rows();
+        // Tile 15 is cached but not on screen, and the oldest.
+        for (h, c) in rows.cache.iter_mut() {
+            c.size = 4 << 20;
+            c.used = if *h == 15 { 0 } else { 1 };
+        }
+        rows.bytes = 24 << 20;
+        let mut out = Vec::new();
+        rows.evict(&mut out);
+        assert!(out.is_empty(), "under the limit: {out:?}");
+        // The hint atlas takes it over: the tile off screen goes, no other.
+        rows.hop_bytes = 30 << 20;
+        rows.evict(&mut out);
+        assert_eq!(out, b"\x1b_Ga=d,d=I,i=15,q=2\x1b\\");
+        assert!((10..15).all(|h| rows.cache.contains_key(&h)));
+        assert_eq!(rows.bytes, 20 << 20);
+    }
+
+    #[test]
+    fn png_rgba_bytes_reads_the_size_from_ihdr() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&300u32.to_be_bytes());
+        png.extend_from_slice(&20u32.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        assert_eq!(png_rgba_bytes(&b64), 300 * 20 * 4);
+        assert_eq!(png_rgba_bytes("not a png"), 0);
     }
 }
