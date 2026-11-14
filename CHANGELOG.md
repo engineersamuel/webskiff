@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/engineersamuel/webskiff/compare/v0.8.0...v0.8.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* gi focuses only text fields; clear pending prefix on page-driven insert ([#40](https://github.com/engineersamuel/webskiff/issues/40)) ([40ed719](https://github.com/engineersamuel/webskiff/commit/40ed7195376678169b6b3d62c5544f9a0c3995eb))
+
 ## [0.8.0](https://github.com/engineersamuel/webskiff/compare/v0.7.0...v0.8.0) (2026-11-14)
 
 
