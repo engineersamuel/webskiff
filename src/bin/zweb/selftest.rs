@@ -449,6 +449,26 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             Check::Js("document.activeElement.id", "\"q\""),
         ),
         (
+            "gi skips a contenteditable checkbox",
+            focus_input("<input type=checkbox contenteditable=true><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips a contenteditable readonly input",
+            focus_input("<input readonly contenteditable=true><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips a contenteditable disabled input",
+            focus_input("<input disabled contenteditable=true><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips a contenteditable readonly textarea",
+            focus_input("<textarea readonly contenteditable=true></textarea><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
             "frame cost at 1280x800 CSS, scale 1",
             Box::new(|c, v| {
                 c.measure.set(true);
