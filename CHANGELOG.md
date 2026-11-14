@@ -1,22 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Bug Fixes
-
-- Preserve forward jumplist entries when a background tab finishes navigating.
-- Preserve jumplist history through rapid jumps and redirected restores.
-- Cancel pending jumplist restores when switching away from a tab, recording its
-  committed page instead of the unfinished destination.
-- Ignore queued commits from restores cancelled by Back, Forward, Reload, Stop,
-  or opening a URL; Stop also clears the loading indicator.
-- Stop cancelled jumplist restores and clear the loading indicator even when
-  Back or Forward has no engine history entry.
-
-### Known limitations
-
-- A jump (Ctrl-O/Ctrl-I) can be overtaken by a page load that started before it. The engine's load callback carries no navigation identity, and no exact fix has been found with the current engine API.
-
 ## [0.6.0](https://github.com/engineersamuel/webskiff/compare/v0.5.0...v0.6.0) (2026-11-14)
 
 
