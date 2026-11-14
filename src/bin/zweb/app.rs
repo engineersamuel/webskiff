@@ -3106,7 +3106,11 @@ mod jumps_tests {
             assert!(app.navigation_command(action));
             assert_eq!(
                 &*app.tab().view.calls.borrow(),
-                &["load https://example.com/old", "stop", &format!("load {expected}")]
+                &[
+                    "load https://example.com/old",
+                    "stop",
+                    &format!("load {expected}")
+                ]
             );
             assert_eq!(app.tab().load_generation.get(), generation + 1);
             assert!(!app.tab().nav.restoring());
