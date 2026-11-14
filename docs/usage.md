@@ -42,7 +42,7 @@ Prompts support arrows, Home/End, Delete/Backspace, paste at the cursor,
 Ctrl-U to clear, and Ctrl-W to delete a word. Focused page text fields receive
 typing; Escape returns to browser shortcuts. Pages that focus an input on load
 may therefore require Escape before browser shortcuts work.
-`g e` (opt-in: bind `edit_external = ["g e"]`) opens the focused text field, or the one just left with Escape, in
+`g e` opens the focused text field, or the one just left with Escape, in
 `$VISUAL`/`$EDITOR` (else `vi`) and writes the saved text back (CRLF line
 endings are read as LF). Password,
 read-only and disabled fields are not edited, and only one edit runs at a time.

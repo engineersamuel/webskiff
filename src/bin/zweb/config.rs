@@ -763,9 +763,8 @@ mod tests {
     }
 
     #[test]
-    fn g_e_edits_the_text_field_externally_when_configured() {
-        let config =
-            Config::parse("[keys.browse]\nedit_external = ['g e']").unwrap();
+    fn g_e_edits_the_text_field_externally() {
+        let config = Config::parse("").unwrap();
         let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char('g')), None) {
             Binding::Prefix(prefix) => prefix,
             _ => panic!("missing g prefix"),
