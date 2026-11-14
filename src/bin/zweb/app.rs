@@ -3321,7 +3321,7 @@ fn display_char(c: char) -> char {
 }
 
 /// The page put the caret in a text field without a key: keys type into it.
-/// A prefix typed before it is void: Esc must not bring its strip back.
+/// A prefix typed before it is void: Esc must not bring its popup back.
 fn enter_insert(mode: &mut Mode, pending: &mut Option<Stroke>) {
     *mode = Mode::Insert;
     *pending = None;
