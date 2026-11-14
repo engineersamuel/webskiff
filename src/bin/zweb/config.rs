@@ -895,13 +895,17 @@ mod tests {
         assert_eq!(
             config.continuations(Scope::Browse, g),
             [
+                ("U".to_string(), "Go to the root of the address"),
+                ("[".to_string(), "History back"),
+                ("]".to_string(), "History forward"),
                 ("e".to_string(), "Edit the text field in $EDITOR"),
                 (
                     "f".to_string(),
                     "Show hints filtered by link text; digits pick"
                 ),
                 ("g".to_string(), "Go to the top"),
-                ("i".to_string(), "Focus the first text field")
+                ("i".to_string(), "Focus the first text field"),
+                ("u".to_string(), "Go up one level in the address")
             ]
         );
     }
