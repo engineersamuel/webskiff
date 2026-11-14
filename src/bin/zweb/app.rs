@@ -1,7 +1,7 @@
 //! The browser: tabs, modes, commands, and the two text rows around the page.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -86,9 +86,11 @@ pub enum Msg {
         session: u64,
         reply: HintReply,
     },
-    /// Hints read ahead (hints.js `__zwebHopPrepare()`).
+    /// Hints read ahead (hints.js `__zwebHopPrepare()`), started at page
+    /// commit count `page` (`ReadAhead`).
     Prepared {
         tab: u64,
+        page: u64,
         filter: bool,
         json: String,
     },
@@ -389,6 +391,41 @@ impl HintFilter {
 /// Hints read ahead for a tab: its id, hints.js's id, the overlay, the hints.
 type Prepared = (u64, String, Hop, Vec<Hint>);
 
+/// Hints read ahead, one for each set of code keys (letters, digits).
+#[derive(Default)]
+struct ReadAhead {
+    /// Page commits of each tab: a read keeps its tab's count at start.
+    pages: HashMap<u64, u64>,
+    slots: [Option<Prepared>; 2],
+}
+
+impl ReadAhead {
+    /// A page committed in `tab`: what was read of its page before is old.
+    fn committed(&mut self, tab: u64) {
+        *self.pages.entry(tab).or_default() += 1;
+        for p in &mut self.slots {
+            if p.as_ref().is_some_and(|p| p.0 == tab) {
+                *p = None;
+            }
+        }
+    }
+
+    fn page(&self, tab: u64) -> u64 {
+        self.pages.get(&tab).copied().unwrap_or(0)
+    }
+
+    /// The reply of a read started at `page`; one started before a page
+    /// commit in its tab is of the page before.
+    fn read(&mut self, page: u64, tab: u64, filter: bool, json: &str) {
+        if page != self.page(tab) {
+            return;
+        }
+        if let (Some(id), Some(hop), hints) = parse_hints(json) {
+            self.slots[filter as usize] = Some((tab, id, hop, hints));
+        }
+    }
+}
+
 /// hints.js's result, a JSON string of JSON: its id, overlay and hints.
 fn parse_hints(json: &str) -> (Option<String>, Option<Hop>, Vec<Hint>) {
     let mut v: serde_json::Value = serde_json::from_str::<String>(json)
@@ -470,7 +507,7 @@ pub struct App {
     prompt: Option<Prompt>,
     hints: Vec<Hint>,
     /// Hints read ahead, for each of HINT_KEYS.
-    prepared: [Option<Prepared>; 2],
+    prepared: ReadAhead,
     hint_typed: String,
     /// Filtered hints (`g f`), and their input.
     hint_filter: bool,
@@ -535,7 +572,7 @@ impl App {
             mode: Mode::Browse,
             prompt: None,
             hints: Vec::new(),
-            prepared: [None, None],
+            prepared: ReadAhead::default(),
             hint_typed: String::new(),
             hint_filter: false,
             filter: HintFilter::default(),
@@ -866,7 +903,12 @@ impl App {
                 result,
             } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
-            Msg::Prepared { tab, filter, json } => self.hints_prepared(tab, filter, &json),
+            Msg::Prepared {
+                tab,
+                page,
+                filter,
+                json,
+            } => self.prepared.read(page, tab, filter, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
             Msg::Focused { ok } => self.focused(ok),
             Msg::EditText { tab, json } => self.edit_text(tab, json),
@@ -934,11 +976,7 @@ impl App {
             self.saver.changed(Instant::now());
         }
         tab.url = url;
-        for p in &mut self.prepared {
-            if p.as_ref().is_some_and(|p| p.0 == tab.id) {
-                *p = None;
-            }
-        }
+        self.prepared.committed(tab.id);
         if i == self.active {
             if self.mode == Mode::Hint {
                 self.reset_hints();
@@ -1040,7 +1078,7 @@ impl App {
         // A JSON string of the JSON list, of {png, list}, or of {id}: the
         // hints read ahead are still right (hints.js).
         let v = json.ok().map(|j| parse_hints(&j)).unwrap_or_default();
-        let prepared = self.prepared[self.hint_filter as usize]
+        let prepared = self.prepared.slots[self.hint_filter as usize]
             .take()
             .filter(|p| p.0 == tab && v.0.as_deref() == Some(p.1.as_str()));
         let hop = match prepared {
@@ -1098,6 +1136,7 @@ impl App {
         {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
+            let page = self.prepared.page(tab);
             for filter in [false, true]
                 .into_iter()
                 .filter(|&f| !f || self.filter_used)
@@ -1115,17 +1154,16 @@ impl App {
                                 .map_or_else(|e| e.to_string(), |j| format!("{} B", j.len()))
                         );
                         if let Ok(json) = r {
-                            send(Msg::Prepared { tab, filter, json });
+                            send(Msg::Prepared {
+                                tab,
+                                page,
+                                filter,
+                                json,
+                            });
                         }
                     },
                 );
             }
-        }
-    }
-
-    fn hints_prepared(&mut self, tab: u64, filter: bool, json: &str) {
-        if let (Some(id), Some(hop), hints) = parse_hints(json) {
-            self.prepared[filter as usize] = Some((tab, id, hop, hints));
         }
     }
 
@@ -1684,7 +1722,7 @@ impl App {
         self.filter = HintFilter::default();
         self.hint_session += 1;
         let (id, session) = (self.tab().id, self.hint_session);
-        let kept = self.prepared[filter as usize]
+        let kept = self.prepared.slots[filter as usize]
             .as_ref()
             .filter(|p| p.0 == id)
             .map_or("", |p| p.1.as_str());
@@ -2626,7 +2664,7 @@ mod tests {
                 .map(|s| s.as_ref().map(|p| (p.0, p.1.clone())))
         };
         let mut r = super::ReadAhead::default();
-        let before = r.page;
+        let before = r.page(7);
         r.read(before, 7, false, &read("old:1"));
         assert_eq!(kept(&r), [Some((7, "old:1".into())), None]);
         // A page commits in tab 7; replies started before it come late.
@@ -2636,7 +2674,7 @@ mod tests {
         r.read(before, 7, true, &read("old:3"));
         assert_eq!(kept(&r), [None, None]);
         // Reads of the new page, letters and digits, are kept.
-        let now = r.page;
+        let now = r.page(7);
         r.read(now, 7, false, &read("new:1"));
         r.read(now, 7, true, &read("new:2"));
         assert_eq!(
@@ -2648,6 +2686,13 @@ mod tests {
         assert_eq!(
             kept(&r),
             [Some((7, "new:1".into())), Some((7, "new:2".into()))]
+        );
+        // A commit in another tab: this tab's read is still right.
+        r.committed(8);
+        r.read(now, 7, true, &read("new:3"));
+        assert_eq!(
+            kept(&r),
+            [Some((7, "new:1".into())), Some((7, "new:3".into()))]
         );
     }
 
