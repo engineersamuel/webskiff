@@ -35,6 +35,10 @@ use zebkit::{after, View as TabView};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
+pub const FOCUS_INPUT_JS: &str = "(()=>{const e=[...document.querySelectorAll('input:not([type=button],[type=checkbox],[type=color],\
+    [type=file],[type=hidden],[type=image],[type=radio],[type=range],[type=reset],[type=submit],:disabled,[readonly]),\
+    textarea:not(:disabled,[readonly]),[contenteditable]:not([contenteditable=false],input,textarea)')]\
+    .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
 const EDITABLE_JS: &str = concat!(editable!(), "(document.activeElement)");
 /// Defines `__zwebCaret` (caret.js) and starts a one-character selection; `false` if no text is visible.
 pub const VISUAL_START_JS: &str = concat!(include_str!("caret.js"), ";__zwebCaret.start()");
@@ -1239,7 +1243,7 @@ impl App {
 
     fn focused(&mut self, ok: bool) {
         if ok {
-            self.mode = Mode::Insert;
+            enter_insert(&mut self.mode, &mut self.pending_key);
         } else {
             self.message = "no text field here".into();
         }
@@ -1596,8 +1600,7 @@ impl App {
     fn page_command(&mut self, action: Action) -> bool {
         match action {
             Action::FocusInput => {
-                let focus = "(()=>{const e=[...document.querySelectorAll('input:not([type=hidden]),textarea,[contenteditable]')]\
-                    .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
+                let focus = FOCUS_INPUT_JS;
                 self.view().evaluate(focus, |r| {
                     send(Msg::Focused {
                         ok: r.as_deref() == Ok("true"),
@@ -2131,7 +2134,7 @@ impl App {
         self.last_click = (Instant::now(), x, y, 1);
         self.click(x, y, 1);
         if edit {
-            self.mode = Mode::Insert;
+            enter_insert(&mut self.mode, &mut self.pending_key);
         }
         self.draw();
     }
@@ -3317,6 +3320,13 @@ fn display_char(c: char) -> char {
     }
 }
 
+/// The page put the caret in a text field without a key: keys type into it.
+/// A prefix typed before it is void: Esc must not bring its popup back.
+fn enter_insert(mode: &mut Mode, pending: &mut Option<Stroke>) {
+    *mode = Mode::Insert;
+    *pending = None;
+}
+
 fn clip(s: &str, width: usize) -> String {
     let mut out = String::new();
     let mut w = 0;
@@ -3719,5 +3729,20 @@ mod tests {
         ] {
             assert_eq!(url_root(url).as_deref(), want, "{url}");
         }
+    }
+
+    #[test]
+    fn entering_insert_from_the_page_drops_a_pending_prefix() {
+        use super::{enter_insert, Mode};
+        use crate::config::Stroke;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut mode = Mode::Browse;
+        let mut pending = Some(Stroke::from_event(KeyEvent::from(KeyCode::Char('g'))));
+        enter_insert(&mut mode, &mut pending);
+        assert!(mode == Mode::Insert);
+        assert!(
+            pending.is_none(),
+            "a `g` typed before the page focused a field stays pending"
+        );
     }
 }

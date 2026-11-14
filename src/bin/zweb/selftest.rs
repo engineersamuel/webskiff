@@ -15,7 +15,8 @@ use zebkit::page::DialogPolicy;
 use zebkit::{LoadEvent, View};
 
 use crate::app::{
-    visual_script, yank, App, Msg, Options, APP, FIND_JS, HINTS_JS, VISUAL_START_JS, YANK_JS,
+    visual_script, yank, App, Msg, Options, APP, FIND_JS, FOCUS_INPUT_JS, HINTS_JS,
+    VISUAL_START_JS, YANK_JS,
 };
 use crate::config::{Action, Config};
 use crate::{keys, render};
@@ -120,6 +121,13 @@ fn app_events(report: &View, name: &'static str, events: &[Event]) {
             );
         });
     });
+}
+
+fn focus_input(html: &'static str) -> Act {
+    Box::new(move |_, v| {
+        v.evaluate(&format!("document.body.innerHTML={html:?}"), |_| {});
+        v.evaluate(FOCUS_INPUT_JS, |_| {});
+    })
 }
 
 fn steps() -> Vec<(&'static str, Act, Check)> {
@@ -417,6 +425,48 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                 app_keys(v, "vnone", &[KeyCode::Char('v')]);
             }),
             Check::Js("window.vnone", "\"[false,\\\"\\\"]\""),
+        ),
+        (
+            "gi skips a checkbox, disabled and readonly fields",
+            focus_input("<input type=checkbox><input disabled><input readonly><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips every non-text input type and hidden fields",
+            focus_input(
+                "<input type=button value=b><input type=checkbox><input type=color><input type=file>\
+                 <input type=hidden><input type=image alt=i><input type=radio><input type=range>\
+                 <input type=reset><input type=submit><input style=display:none>\
+                 <textarea disabled></textarea><textarea readonly></textarea>\
+                 <div contenteditable=false>x</div><input id=q>",
+            ),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        ("gi focuses a textarea", focus_input("<input type=submit><textarea id=q></textarea>"), Check::Js("document.activeElement.id", "\"q\"")),
+        (
+            "gi focuses a contenteditable",
+            focus_input("<input type=radio><div contenteditable id=q>x</div>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips a contenteditable checkbox",
+            focus_input("<input type=checkbox contenteditable=true><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips a contenteditable readonly input",
+            focus_input("<input readonly contenteditable=true><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips a contenteditable disabled input",
+            focus_input("<input disabled contenteditable=true><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
+        ),
+        (
+            "gi skips a contenteditable readonly textarea",
+            focus_input("<textarea readonly contenteditable=true></textarea><input id=q>"),
+            Check::Js("document.activeElement.id", "\"q\""),
         ),
         (
             "frame cost at 1280x800 CSS, scale 1",
