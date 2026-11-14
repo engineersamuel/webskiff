@@ -39,7 +39,8 @@ use app::{send, App, Msg, Options, APP};
 use render::{Gfx, Renderer};
 
 fn data_dir() -> std::path::PathBuf {
-    let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())).join(".cache/zweb");
+    let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+        .join(".cache/zweb");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -47,7 +48,11 @@ fn data_dir() -> std::path::PathBuf {
 /// Engine logs go to a file: on the terminal they would break the screen.
 /// Returns a copy of the real stderr, for panics.
 fn redirect_stderr() -> i32 {
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(data_dir().join("zweb.log")).unwrap();
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data_dir().join("zweb.log"))
+        .unwrap();
     unsafe {
         let saved = libc::dup(2);
         libc::dup2(log.as_raw_fd(), 2);
@@ -57,9 +62,18 @@ fn redirect_stderr() -> i32 {
 
 fn enter_screen(enhanced: bool) -> std::io::Result<()> {
     let mut out = std::io::stdout();
-    execute!(out, terminal::EnterAlternateScreen, cursor::Hide, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(
+        out,
+        terminal::EnterAlternateScreen,
+        cursor::Hide,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     if enhanced {
-        let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        let _ = execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
     }
     Ok(())
 }
@@ -70,7 +84,13 @@ fn restore_terminal(enhanced: bool) {
     if enhanced {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
-    let _ = execute!(out, DisableBracketedPaste, DisableMouseCapture, cursor::Show, terminal::LeaveAlternateScreen);
+    let _ = execute!(
+        out,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        cursor::Show,
+        terminal::LeaveAlternateScreen
+    );
     let _ = terminal::disable_raw_mode();
 }
 
@@ -91,7 +111,11 @@ fn query_graphics() -> (bool, bool) {
     let deadline = Instant::now() + Duration::from_millis(1500);
     let mut stdin = std::io::stdin();
     while Instant::now() < deadline {
-        let mut fds = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
+        let mut fds = libc::pollfd {
+            fd: 0,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         if unsafe { libc::poll(&mut fds, 1, 50) } <= 0 {
             continue;
         }
@@ -126,13 +150,21 @@ fn main() {
         cli::Command::Version => {
             println!(
                 "webskiff {} (zebkit {}; {}; {}; {})",
-                env!("CARGO_PKG_VERSION"), zebkit::version(), zebkit::engine_version(),
-                env!("WEBSKIFF_BUILD_TARGET"), env!("WEBSKIFF_BUILD_COMMIT")
+                env!("CARGO_PKG_VERSION"),
+                zebkit::version(),
+                zebkit::engine_version(),
+                env!("WEBSKIFF_BUILD_TARGET"),
+                env!("WEBSKIFF_BUILD_COMMIT")
             );
             return;
         }
         cli::Command::Selftest => std::process::exit(selftest::run()),
-        cli::Command::Browse { address, gfx, scale, placeholders } => (address, gfx, scale, placeholders),
+        cli::Command::Browse {
+            address,
+            gfx,
+            scale,
+            placeholders,
+        } => (address, gfx, scale, placeholders),
     };
     trace::init();
     let url = match address.as_deref().map(app::to_url).transpose() {
@@ -158,7 +190,13 @@ fn main() {
         Ok("herdr" | "ghostty" | "WezTerm")
     ) || std::env::var("KITTY_WINDOW_ID").is_ok();
     let gfx = requested_gfx.unwrap_or({
-        if shm { Gfx::KittyShm } else if kitty || known_kitty { Gfx::KittyDirect } else { Gfx::Blocks }
+        if shm {
+            Gfx::KittyShm
+        } else if kitty || known_kitty {
+            Gfx::KittyDirect
+        } else {
+            Gfx::Blocks
+        }
     });
     let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
     enter_screen(enhanced).unwrap();
@@ -181,25 +219,39 @@ fn main() {
     let r = renderer.clone();
     // Cookie key in a file of the profile, not the macOS Keychain: a rebuilt
     // binary would make the Keychain ask again, and loads wait for the answer.
-    let mut engine_args: Vec<String> = ["zweb", "--headless", profile.as_str(), "--zebkit-cookie-storage=file",
+    let mut engine_args: Vec<String> = [
+        "zweb",
+        "--headless",
+        profile.as_str(),
+        "--zebkit-cookie-storage=file",
         // One frame per scroll step, not ~300 ms of animation frames to send.
         "--disable-smooth-scrolling",
         // Frames sooner after input: no wait for a GPU vsync, and the page
         // drawn in memory, so its capture needs no read back from the GPU.
-        "--disable-gpu-vsync", "--disable-gpu-compositing",
+        "--disable-gpu-vsync",
+        "--disable-gpu-compositing",
         // As macOS shows them when not scrolling: none. A moving thumb would
         // also change rows that scrolling otherwise only moves.
-        "--hide-scrollbars"]
-        .iter()
-        .map(|a| a.to_string())
-        .collect();
+        "--hide-scrollbars",
+    ]
+    .iter()
+    .map(|a| a.to_string())
+    .collect();
     // For experiments: more Chromium switches.
     if let Ok(extra) = std::env::var("ZWEB_ARGS") {
         engine_args.extend(extra.split_whitespace().map(String::from));
     }
     let code = zebkit::run_with_args(engine_args, move || {
         APP.with(|a| {
-            let mut app = App::new(r, Options { scale, placeholders, enhanced }, config);
+            let mut app = App::new(
+                r,
+                Options {
+                    scale,
+                    placeholders,
+                    enhanced,
+                },
+                config,
+            );
             app.relayout();
             app.open_tab(Some(&url), None);
             *a.borrow_mut() = Some(app);
@@ -213,7 +265,9 @@ fn main() {
                 continue;
             }
             edit::INPUT_IDLE.store(false, Ordering::SeqCst);
-            match event::poll(Duration::from_millis(50)).and_then(|ready| ready.then(event::read).transpose()) {
+            match event::poll(Duration::from_millis(50))
+                .and_then(|ready| ready.then(event::read).transpose())
+            {
                 Ok(Some(ev)) => {
                     trace!("input read {ev:?}");
                     zebkit::post(move || send(Msg::Term(ev)))

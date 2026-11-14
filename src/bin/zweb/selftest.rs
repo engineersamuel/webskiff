@@ -68,10 +68,26 @@ fn click(view: &View, x: f32, y: f32) {
 
 fn steps() -> Vec<(&'static str, Act, Check)> {
     vec![
-        ("click focuses the input", Box::new(|_, v| click(v, 110.0, 20.0)), Check::Js("document.activeElement.id", "\"f\"")),
-        ("caret callback fires", Box::new(|_, _| {}), Check::Flag(|c| c.caret.get())),
-        ("typing text", Box::new(|_, v| typed(v, "Hi there")), Check::Js("f.value", "\"Hi there\"")),
-        ("Backspace", Box::new(|_, v| press(v, key(KeyCode::Backspace, KeyModifiers::NONE))), Check::Js("f.value", "\"Hi ther\"")),
+        (
+            "click focuses the input",
+            Box::new(|_, v| click(v, 110.0, 20.0)),
+            Check::Js("document.activeElement.id", "\"f\""),
+        ),
+        (
+            "caret callback fires",
+            Box::new(|_, _| {}),
+            Check::Flag(|c| c.caret.get()),
+        ),
+        (
+            "typing text",
+            Box::new(|_, v| typed(v, "Hi there")),
+            Check::Js("f.value", "\"Hi there\""),
+        ),
+        (
+            "Backspace",
+            Box::new(|_, v| press(v, key(KeyCode::Backspace, KeyModifiers::NONE))),
+            Check::Js("f.value", "\"Hi ther\""),
+        ),
         (
             "arrow keys move the caret",
             Box::new(|_, v| {
@@ -81,7 +97,11 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("f.value", "\"Hi thXer\""),
         ),
-        ("paste (bracketed paste -> IME commit)", Box::new(|_, v| v.ime_commit(" ✓ok")), Check::Js("f.value", "\"Hi thX ✓oker\"")),
+        (
+            "paste (bracketed paste -> IME commit)",
+            Box::new(|_, v| v.ime_commit(" ✓ok")),
+            Check::Js("f.value", "\"Hi thX ✓oker\""),
+        ),
         (
             "Ctrl-A selects all, then typing replaces",
             Box::new(|_, v| {
@@ -90,7 +110,11 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("f.value", "\"z\""),
         ),
-        ("Enter submits the form", Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))), Check::Js("document.title", "\"submitted:z\"")),
+        (
+            "Enter submits the form",
+            Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))),
+            Check::Js("document.title", "\"submitted:z\""),
+        ),
         (
             "hint script finds 4 targets and its click works",
             Box::new(|_, v| {
@@ -101,15 +125,34 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                         .and_then(|j| serde_json::from_str::<String>(&j).ok())
                         .and_then(|j| serde_json::from_str(&j).ok())
                         .unwrap_or_default();
-                    println!("      hints: {}", list.iter().map(|h| h["k"].as_str().unwrap_or("?")).collect::<Vec<_>>().join(" "));
+                    println!(
+                        "      hints: {}",
+                        list.iter()
+                            .map(|h| h["k"].as_str().unwrap_or("?"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
                     let rendered = list.iter().all(|h| h["k"].is_string());
-                    if let Some(h) = list.iter().find(|h| (h["y"].as_f64().unwrap_or(0.0) - 75.0).abs() < 10.0) {
-                        click(&page, h["x"].as_f64().unwrap() as f32, h["y"].as_f64().unwrap() as f32);
+                    if let Some(h) = list
+                        .iter()
+                        .find(|h| (h["y"].as_f64().unwrap_or(0.0) - 75.0).abs() < 10.0)
+                    {
+                        click(
+                            &page,
+                            h["x"].as_f64().unwrap() as f32,
+                            h["y"].as_f64().unwrap() as f32,
+                        );
                     }
-                    page.evaluate(&format!("window.hintCount={}", if rendered { list.len() } else { 0 }), |_| {});
+                    page.evaluate(
+                        &format!("window.hintCount={}", if rendered { list.len() } else { 0 }),
+                        |_| {},
+                    );
                 });
             }),
-            Check::Js("[window.hintCount, b.textContent, !!window.__zwebHop].join()", "\"4,clicked,true\""),
+            Check::Js(
+                "[window.hintCount, b.textContent, !!window.__zwebHop].join()",
+                "\"4,clicked,true\"",
+            ),
         ),
         (
             "select opens a popup layer",
@@ -127,8 +170,16 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("s.value", "\"two\""),
         ),
-        ("popup closed after choosing", Box::new(|_, _| {}), Check::Flag(|c| !c.popup.get())),
-        ("window.open becomes a new view", Box::new(|_, v| click(v, 60.0, 175.0)), Check::Flag(|c| c.opened.get())),
+        (
+            "popup closed after choosing",
+            Box::new(|_, _| {}),
+            Check::Flag(|c| !c.popup.get()),
+        ),
+        (
+            "window.open becomes a new view",
+            Box::new(|_, v| click(v, 60.0, 175.0)),
+            Check::Flag(|c| c.opened.get()),
+        ),
         (
             "confirm() is held for the app",
             Box::new(|_, v| v.evaluate("setTimeout(()=>{window.r=confirm('ok?')},10)", |_| {})),
@@ -158,25 +209,38 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
             }),
             Check::Js("document.activeElement.id", "\"t2\""),
         ),
-        ("Enter opens the link at the match", Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))), Check::Js("window.followed", "2")),
+        (
+            "Enter opens the link at the match",
+            Box::new(|_, v| press(v, key(KeyCode::Enter, KeyModifiers::NONE))),
+            Check::Js("window.followed", "2"),
+        ),
         (
             "visual mode: from a find match, w extends over the word, y yanks it as OSC 52",
             Box::new(|_, v| {
                 // A find match on "bravo", as window.find leaves it.
-                v.evaluate("const r=new Range();r.setStart(v.firstChild,6);r.setEnd(v.firstChild,11);\
-                    getSelection().removeAllRanges();getSelection().addRange(r)", |_| {});
+                v.evaluate(
+                    "const r=new Range();r.setStart(v.firstChild,6);r.setEnd(v.firstChild,11);\
+                    getSelection().removeAllRanges();getSelection().addRange(r)",
+                    |_| {},
+                );
                 v.evaluate(VISUAL_START_JS, |_| {});
                 v.evaluate(&visual_script(Action::WordForward).unwrap(), |_| {});
                 let page = v.clone();
                 v.evaluate(YANK_JS, move |r| {
-                    let text = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()).unwrap_or_default();
+                    let text = r
+                        .ok()
+                        .and_then(|j| serde_json::from_str::<String>(&j).ok())
+                        .unwrap_or_default();
                     let osc = yank(&text).0.unwrap_or_default();
                     let payload = std::str::from_utf8(&osc)
                         .ok()
                         .and_then(|s| s.strip_prefix("\x1b]52;c;")?.strip_suffix('\x07'))
                         .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
                         .unwrap_or_default();
-                    let js = format!("window.yanked={}", serde_json::to_string(&String::from_utf8_lossy(&payload)).unwrap());
+                    let js = format!(
+                        "window.yanked={}",
+                        serde_json::to_string(&String::from_utf8_lossy(&payload)).unwrap()
+                    );
                     page.evaluate(&js, |_| {});
                 });
             }),
@@ -205,7 +269,14 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
 fn run_step(ctx: Rc<Ctx>, mut list: Vec<(&'static str, Act, Check)>) {
     if list.is_empty() {
         let fails = ctx.fails.get();
-        println!("{}", if fails == 0 { "ALL PASSED".to_string() } else { format!("{fails} FAILED") });
+        println!(
+            "{}",
+            if fails == 0 {
+                "ALL PASSED".to_string()
+            } else {
+                format!("{fails} FAILED")
+            }
+        );
         zebkit::quit();
         return;
     }
@@ -215,7 +286,15 @@ fn run_step(ctx: Rc<Ctx>, mut list: Vec<(&'static str, Act, Check)>) {
     zebkit::after(Duration::from_millis(700), move || {
         let c2 = ctx.clone();
         let report = move |ok: bool, got: String| {
-            println!("  {} {name}{}", if ok { "PASS" } else { "FAIL" }, if ok { String::new() } else { format!(" (got {got})") });
+            println!(
+                "  {} {name}{}",
+                if ok { "PASS" } else { "FAIL" },
+                if ok {
+                    String::new()
+                } else {
+                    format!(" (got {got})")
+                }
+            );
             if !ok {
                 c2.fails.set(c2.fails.get() + 1);
             }
@@ -271,41 +350,50 @@ fn measure(frame: zebkit::offscreen::Frame) {
 pub fn run() -> i32 {
     let ctx = Rc::new(Ctx::default());
     let c = ctx.clone();
-    zebkit::run_with_args(["zweb", "--headless", "--zebkit-cookie-storage=file"], move || {
-        let timeout_ctx = c.clone();
-        zebkit::after(Duration::from_secs(60), move || {
-            timeout_ctx.fails.set(timeout_ctx.fails.get() + 1);
-            println!("TIMEOUT");
-            zebkit::quit();
-        });
-        let view = View::new_offscreen(None, 800, 600, 1.0).expect("off-screen view");
-        view.set_focus(true);
-        view.set_dialog_policy(DialogPolicy::Hold);
-        let k = c.clone();
-        view.on_caret(move |r| k.caret.set(r.is_some()));
-        let k = c.clone();
-        view.on_popup(move |r| k.popup.set(r.is_some()));
-        let k = c.clone();
-        view.on_window_open(move |_v, _| k.opened.set(true));
-        let k = c.clone();
-        view.on_dialog(move |d| k.dialog.set(Some(d.id)));
-        let k = c.clone();
-        view.on_frame(move |f| {
-            if f.layer() == zebkit::offscreen::Layer::View && f.width() >= 1280 && k.measure.replace(false) {
-                measure(f);
-            }
-        });
-        let started = Rc::new(Cell::new(false));
-        let k = c.clone();
-        view.on_load(move |e, _| {
-            if e == LoadEvent::Finished && !started.replace(true) {
-                println!("zweb self-test");
-                run_step(k.clone(), steps());
-            }
-        });
-        let url = format!("data:text/html;base64,{}", base64::engine::general_purpose::STANDARD.encode(PAGE));
-        view.load_url(&url);
-        *c.view.borrow_mut() = Some(view);
-    });
+    zebkit::run_with_args(
+        ["zweb", "--headless", "--zebkit-cookie-storage=file"],
+        move || {
+            let timeout_ctx = c.clone();
+            zebkit::after(Duration::from_secs(60), move || {
+                timeout_ctx.fails.set(timeout_ctx.fails.get() + 1);
+                println!("TIMEOUT");
+                zebkit::quit();
+            });
+            let view = View::new_offscreen(None, 800, 600, 1.0).expect("off-screen view");
+            view.set_focus(true);
+            view.set_dialog_policy(DialogPolicy::Hold);
+            let k = c.clone();
+            view.on_caret(move |r| k.caret.set(r.is_some()));
+            let k = c.clone();
+            view.on_popup(move |r| k.popup.set(r.is_some()));
+            let k = c.clone();
+            view.on_window_open(move |_v, _| k.opened.set(true));
+            let k = c.clone();
+            view.on_dialog(move |d| k.dialog.set(Some(d.id)));
+            let k = c.clone();
+            view.on_frame(move |f| {
+                if f.layer() == zebkit::offscreen::Layer::View
+                    && f.width() >= 1280
+                    && k.measure.replace(false)
+                {
+                    measure(f);
+                }
+            });
+            let started = Rc::new(Cell::new(false));
+            let k = c.clone();
+            view.on_load(move |e, _| {
+                if e == LoadEvent::Finished && !started.replace(true) {
+                    println!("zweb self-test");
+                    run_step(k.clone(), steps());
+                }
+            });
+            let url = format!(
+                "data:text/html;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(PAGE)
+            );
+            view.load_url(&url);
+            *c.view.borrow_mut() = Some(view);
+        },
+    );
     ctx.fails.get()
 }

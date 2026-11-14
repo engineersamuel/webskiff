@@ -8,19 +8,24 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton as TButton, MouseEvent, MouseEventKind};
-use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton as TButton, MouseEvent,
+    MouseEventKind,
+};
+use crossterm::style::{
+    Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
 use crossterm::{cursor, queue, terminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse, WheelPhase};
 use zebkit::page::{Dialog, DialogPolicy, DialogType};
 use zebkit::{LoadEvent, View};
 
-use crate::edit::{self, Edited};
-use crate::keys;
 use crate::config::{Action, Binding, Config, Scope, Stroke};
+use crate::edit::{self, Edited};
 use crate::history::{self, Completion, History, Saver};
 use crate::input::{self, Edit, TextInput};
+use crate::keys;
 use crate::render::{Hop, Layout, Renderer};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
@@ -46,28 +51,80 @@ pub enum HintReply {
 
 pub enum Msg {
     Term(Event),
-    Load { tab: u64, event: LoadEvent, url: String },
-    Title { tab: u64, title: String },
-    Caret { tab: u64, on: bool },
-    Popup { tab: u64, rect: Option<(i32, i32, i32, i32)> },
-    WindowOpen { view: View },
-    Dialog { tab: u64, dialog: Dialog },
-    Hints { tab: u64, reply: HintReply },
+    Load {
+        tab: u64,
+        event: LoadEvent,
+        url: String,
+    },
+    Title {
+        tab: u64,
+        title: String,
+    },
+    Caret {
+        tab: u64,
+        on: bool,
+    },
+    Popup {
+        tab: u64,
+        rect: Option<(i32, i32, i32, i32)>,
+    },
+    WindowOpen {
+        view: View,
+    },
+    Dialog {
+        tab: u64,
+        dialog: Dialog,
+    },
+    Hints {
+        tab: u64,
+        reply: HintReply,
+    },
     /// Hints read ahead (hints.js `__zwebHopPrepare()`).
-    Prepared { tab: u64, json: String },
-    Found { tab: u64, generation: u64, query: String, result: Result<bool, String> },
-    Focused { ok: bool },
+    Prepared {
+        tab: u64,
+        json: String,
+    },
+    Found {
+        tab: u64,
+        generation: u64,
+        query: String,
+        result: Result<bool, String>,
+    },
+    Focused {
+        ok: bool,
+    },
     /// The field's text for the external editor (edit.rs `READ_JS`).
-    EditText { tab: u64, json: Result<String, String> },
-    EditDone { tab: u64, path: PathBuf, edited: Edited },
+    EditText {
+        tab: u64,
+        json: Result<String, String>,
+    },
+    EditDone {
+        tab: u64,
+        path: PathBuf,
+        edited: Edited,
+    },
     /// The edited text went back into the field, or the field was gone.
-    EditWritten { path: PathBuf, ok: bool },
+    EditWritten {
+        path: PathBuf,
+        ok: bool,
+    },
     /// `__zwebCaret.start()` found text to select.
-    VisualStarted { tab: u64, ok: bool },
-    Yanked { tab: u64, text: Option<String> },
-    Extents { tab: u64, json: Option<String> },
+    VisualStarted {
+        tab: u64,
+        ok: bool,
+    },
+    Yanked {
+        tab: u64,
+        text: Option<String>,
+    },
+    Extents {
+        tab: u64,
+        json: Option<String>,
+    },
     /// Read the page for hints ahead, if nothing happened since `gen`.
-    Prepare { gen: u64 },
+    Prepare {
+        gen: u64,
+    },
     Tick,
 }
 
@@ -129,8 +186,16 @@ struct Prompt {
 
 impl Prompt {
     fn new(kind: PromptKind, label: &str, text: &str) -> Self {
-        Self { kind, label: label.into(), input: TextInput::new(text), not_found: false, keep_open: false,
-            hint: String::new(), completion: None, suggestion: None }
+        Self {
+            kind,
+            label: label.into(),
+            input: TextInput::new(text),
+            not_found: false,
+            keep_open: false,
+            hint: String::new(),
+            completion: None,
+            suggestion: None,
+        }
     }
 
     fn completes(&self) -> bool {
@@ -143,7 +208,9 @@ impl Prompt {
             return;
         }
         let text = &self.input.text;
-        let completion = self.completion.get_or_insert_with(|| Completion::new(history, text, now));
+        let completion = self
+            .completion
+            .get_or_insert_with(|| Completion::new(history, text, now));
         if let Some(url) = completion.step(back) {
             self.input = TextInput::new(url);
             self.suggestion = None;
@@ -155,7 +222,10 @@ impl Prompt {
         self.completion = None;
         self.suggestion = None;
         if self.completes() && !self.input.text.trim().is_empty() {
-            self.suggestion = history.top(&self.input.text, now).first().map(|e| e.url.clone());
+            self.suggestion = history
+                .top(&self.input.text, now)
+                .first()
+                .map(|e| e.url.clone());
         }
     }
 
@@ -166,12 +236,22 @@ impl Prompt {
         }
         let (before, after) = self.input.text.split_at(self.input.cursor);
         let prefix = format!(" {}{before}█", self.label);
-        if prefix.chars().map(display_char).map(|c| c.width().unwrap_or(0)).sum::<usize>() > room {
+        if prefix
+            .chars()
+            .map(display_char)
+            .map(|c| c.width().unwrap_or(0))
+            .sum::<usize>()
+            > room
+        {
             return (clip_start(&prefix, room), String::new());
         }
-        let hint = if self.not_found { "  not found" } else if self.input.text.is_empty() {
+        let hint = if self.not_found {
+            "  not found"
+        } else if self.input.text.is_empty() {
             &self.hint
-        } else { "" };
+        } else {
+            ""
+        };
         let text = clip(&format!("{prefix}{after}{hint}"), room);
         let dim = match self.suggestion.as_deref() {
             Some(url) if after.is_empty() => match url.strip_prefix(self.input.text.as_str()) {
@@ -207,10 +287,16 @@ struct Hint {
 
 /// hints.js's result, a JSON string of JSON: its id, overlay and hints.
 fn parse_hints(json: &str) -> (Option<String>, Option<Hop>, Vec<Hint>) {
-    let mut v: serde_json::Value =
-        serde_json::from_str::<String>(json).ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    let mut v: serde_json::Value = serde_json::from_str::<String>(json)
+        .ok()
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default();
     let hop = parse_hop(&v);
-    let list = if v.is_array() { v.take() } else { v["list"].take() };
+    let list = if v.is_array() {
+        v.take()
+    } else {
+        v["list"].take()
+    };
     let hints = list
         .as_array()
         .map(|l| {
@@ -240,7 +326,11 @@ fn parse_hop(v: &serde_json::Value) -> Option<Hop> {
     if let Some(d) = v["dim"].as_array().filter(|d| d.len() == 4) {
         dim = std::array::from_fn(|i| num(&d[i]).min(255) as u8);
     }
-    Some(Hop { png, cells: cells.collect(), dim })
+    Some(Hop {
+        png,
+        cells: cells.collect(),
+        dim,
+    })
 }
 
 pub struct Options {
@@ -309,7 +399,11 @@ pub struct App {
 
 impl App {
     pub fn new(renderer: Arc<Renderer>, opts: Options, bindings: Config) -> App {
-        let message = format!("{} or {} for help", bindings.labels(Scope::Browse, Action::Help), bindings.labels(Scope::Global, Action::Help));
+        let message = format!(
+            "{} or {} for help",
+            bindings.labels(Scope::Browse, Action::Help),
+            bindings.labels(Scope::Global, Action::Help)
+        );
         let help_lines = bindings.help_lines();
         App {
             tabs: Vec::new(),
@@ -366,10 +460,25 @@ impl App {
         let row_css = (cell_h / (dpr * self.zoom)).round().max(1.0);
         self.row_css = row_css as f32;
         let css_h = (page_rows as f64 * row_css) as u32;
-        self.scale = self.opts.scale.unwrap_or(if self.renderer.gfx == crate::render::Gfx::KittyShm { dpr as u32 } else { 1 });
+        self.scale =
+            self.opts
+                .scale
+                .unwrap_or(if self.renderer.gfx == crate::render::Gfx::KittyShm {
+                    dpr as u32
+                } else {
+                    1
+                });
         {
             let mut l = self.renderer.layout.lock().unwrap();
-            *l = Layout { top: 1, cols, rows: page_rows, css_w, css_h, hidden: self.help, popup: l.popup };
+            *l = Layout {
+                top: 1,
+                cols,
+                rows: page_rows,
+                css_w,
+                css_h,
+                hidden: self.help,
+                popup: l.popup,
+            };
         }
         for t in &self.tabs {
             t.view.set_size(css_w, css_h, self.scale as f32);
@@ -394,7 +503,8 @@ impl App {
             return None;
         }
         let x = (col as f32 + 0.5) * l.css_w as f32 / l.cols as f32;
-        let y = (row - l.top) as f32 * l.css_h as f32 / l.rows as f32 + 0.5 * l.css_h as f32 / l.rows as f32;
+        let y = (row - l.top) as f32 * l.css_h as f32 / l.rows as f32
+            + 0.5 * l.css_h as f32 / l.rows as f32;
         Some((x, y))
     }
 
@@ -407,19 +517,31 @@ impl App {
                 v.set_size(l.css_w, l.css_h, self.scale as f32);
                 v
             }
-            None => View::new_offscreen(None, l.css_w, l.css_h, self.scale as f32).expect("off-screen view"),
+            None => View::new_offscreen(None, l.css_w, l.css_h, self.scale as f32)
+                .expect("off-screen view"),
         };
         let id = self.next_id;
         self.next_id += 1;
-        view.set_frame_rate(std::env::var("ZWEB_FPS").ok().and_then(|v| v.parse().ok()).unwrap_or(240.0));
+        view.set_frame_rate(
+            std::env::var("ZWEB_FPS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(240.0),
+        );
         view.set_max_frames_in_flight(2);
         view.set_dialog_policy(DialogPolicy::Hold);
         // Copy buttons (navigator.clipboard.writeText): allowed, as Chrome
         // allows them after a click. Reading the clipboard stays denied.
-        let _ = view.set_permission("clipboard-write", zebkit::PermissionState::Granted, Some("*"));
+        let _ = view.set_permission(
+            "clipboard-write",
+            zebkit::PermissionState::Granted,
+            Some("*"),
+        );
         // The engine has no Badging service: a call to setAppBadge makes
         // Chromium kill the page's renderer (Substack pages do this).
-        view.add_script("delete Navigator.prototype.setAppBadge;delete Navigator.prototype.clearAppBadge");
+        view.add_script(
+            "delete Navigator.prototype.setAppBadge;delete Navigator.prototype.clearAppBadge",
+        );
         if self.opts.placeholders {
             view.add_script(&format!("{PLACEHOLDER_JS}(true)"));
         }
@@ -427,29 +549,77 @@ impl App {
         let debug = std::env::var_os("ZWEB_DEBUG").is_some();
         view.on_frame(move |frame| {
             if debug {
-                eprintln!("frame tab={id} seq={} layer={:?} {}x{} damage={:?}", frame.sequence(), frame.layer(), frame.width(), frame.height(),
-                    frame.damage().iter().map(|r| (r.x, r.y, r.width, r.height)).collect::<Vec<_>>());
+                eprintln!(
+                    "frame tab={id} seq={} layer={:?} {}x{} damage={:?}",
+                    frame.sequence(),
+                    frame.layer(),
+                    frame.width(),
+                    frame.height(),
+                    frame
+                        .damage()
+                        .iter()
+                        .map(|r| (r.x, r.y, r.width, r.height))
+                        .collect::<Vec<_>>()
+                );
             }
             if active.get() == id {
                 if crate::trace::on() {
                     let now = crate::trace::ticks_us();
-                    crate::trace!("frame {} recv drawn {:.2} ms ago, ready {:.2} ms ago", frame.sequence(),
-                        (now - frame.drawn_us()) as f64 / 1000.0, (now - frame.ready_us()) as f64 / 1000.0);
+                    crate::trace!(
+                        "frame {} recv drawn {:.2} ms ago, ready {:.2} ms ago",
+                        frame.sequence(),
+                        (now - frame.drawn_us()) as f64 / 1000.0,
+                        (now - frame.ready_us()) as f64 / 1000.0
+                    );
                 }
                 renderer.submit(frame);
             }
         });
-        view.on_load(move |event, url| send(Msg::Load { tab: id, event, url: url.into() }));
-        view.on_title(move |title| send(Msg::Title { tab: id, title: title.into() }));
-        view.on_caret(move |rect| send(Msg::Caret { tab: id, on: rect.is_some() }));
-        view.on_popup(move |rect| send(Msg::Popup { tab: id, rect: rect.map(|r| (r.x, r.y, r.width, r.height)) }));
+        view.on_load(move |event, url| {
+            send(Msg::Load {
+                tab: id,
+                event,
+                url: url.into(),
+            })
+        });
+        view.on_title(move |title| {
+            send(Msg::Title {
+                tab: id,
+                title: title.into(),
+            })
+        });
+        view.on_caret(move |rect| {
+            send(Msg::Caret {
+                tab: id,
+                on: rect.is_some(),
+            })
+        });
+        view.on_popup(move |rect| {
+            send(Msg::Popup {
+                tab: id,
+                rect: rect.map(|r| (r.x, r.y, r.width, r.height)),
+            })
+        });
         view.on_window_open(|view, _url| send(Msg::WindowOpen { view }));
-        view.on_dialog(move |d| send(Msg::Dialog { tab: id, dialog: d.clone() }));
+        view.on_dialog(move |d| {
+            send(Msg::Dialog {
+                tab: id,
+                dialog: d.clone(),
+            })
+        });
         if let Some(url) = url {
             view.load_url(url);
         }
-        self.tabs.push(Tab { id, view, title: String::new(), url: url.unwrap_or("").into(), loading: url.is_some(), popup: false,
-            pending_title: None, committed: false });
+        self.tabs.push(Tab {
+            id,
+            view,
+            title: String::new(),
+            url: url.unwrap_or("").into(),
+            loading: url.is_some(),
+            popup: false,
+            pending_title: None,
+            committed: false,
+        });
         self.switch(self.tabs.len() - 1);
     }
 
@@ -522,7 +692,12 @@ impl App {
             }
             Msg::Dialog { tab, dialog } => self.dialog_opened(tab, dialog),
             Msg::Hints { tab, reply } => self.hint_reply_received(tab, reply),
-            Msg::Found { tab, generation, query, result } => self.found(tab, generation, &query, result),
+            Msg::Found {
+                tab,
+                generation,
+                query,
+                result,
+            } => self.found(tab, generation, &query, result),
             Msg::Prepare { gen } => self.prepare_hints(gen),
             Msg::Prepared { tab, json } => self.hints_prepared(tab, &json),
             Msg::Extents { tab, json } => self.extents_received(tab, json),
@@ -661,7 +836,10 @@ impl App {
         let (label, text) = match dialog.kind {
             DialogType::Alert => (format!("alert: {} [Enter]", dialog.message), String::new()),
             DialogType::Confirm => (format!("confirm: {} [y/n]", dialog.message), String::new()),
-            DialogType::Prompt => (format!("prompt: {}: ", dialog.message), dialog.default_prompt.clone()),
+            DialogType::Prompt => (
+                format!("prompt: {}: ", dialog.message),
+                dialog.default_prompt.clone(),
+            ),
             DialogType::BeforeUnload => ("leave this page? [y/n]".into(), String::new()),
             DialogType::Print => {
                 self.view().respond_dialog(dialog.id, false, None);
@@ -687,7 +865,10 @@ impl App {
         // A JSON string of the JSON list, of {png, list}, or of {id}: the
         // hints read ahead are still right (hints.js).
         let v = json.ok().map(|j| parse_hints(&j)).unwrap_or_default();
-        let prepared = self.prepared.take().filter(|p| p.0 == tab && v.0.as_deref() == Some(p.1.as_str()));
+        let prepared = self
+            .prepared
+            .take()
+            .filter(|p| p.0 == tab && v.0.as_deref() == Some(p.1.as_str()));
         let hop = match prepared {
             Some((_, _, hop, hints)) => {
                 self.hints = hints;
@@ -726,16 +907,29 @@ impl App {
         // for long (over 300 ms on CI runners), and every page script after
         // it waits. That cost then comes with the first `f`, as before. Not
         // while a prompt or help is open: its page scripts wait behind this.
-        if gen == self.prep_gen && self.hints_used && self.mode == Mode::Browse && self.prompt.is_none() && !self.help && !self.tabs.is_empty() {
+        if gen == self.prep_gen
+            && self.hints_used
+            && self.mode == Mode::Browse
+            && self.prompt.is_none()
+            && !self.help
+            && !self.tabs.is_empty()
+        {
             let lib = HINTS_JS.split("\n(() => {").next().unwrap_or("");
             let tab = self.tab().id;
             crate::trace!("hints prepare");
-            self.view().evaluate(&format!("{}{lib};__zwebHopPrepare()", self.hints_mode()), move |r| {
-                crate::trace!("hints prepared {}", r.as_ref().map_or_else(|e| e.to_string(), |j| format!("{} B", j.len())));
-                if let Ok(json) = r {
-                    send(Msg::Prepared { tab, json });
-                }
-            });
+            self.view().evaluate(
+                &format!("{}{lib};__zwebHopPrepare()", self.hints_mode()),
+                move |r| {
+                    crate::trace!(
+                        "hints prepared {}",
+                        r.as_ref()
+                            .map_or_else(|e| e.to_string(), |j| format!("{} B", j.len()))
+                    );
+                    if let Ok(json) = r {
+                        send(Msg::Prepared { tab, json });
+                    }
+                },
+            );
         }
     }
 
@@ -762,7 +956,10 @@ impl App {
     }
 
     fn edit_text(&mut self, tab: u64, json: Result<String, String>) {
-        let v: serde_json::Value = json.ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+        let v: serde_json::Value = json
+            .ok()
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default();
         let Some(original) = v["text"].as_str().map(String::from) else {
             self.editing = false;
             self.message = match v.as_str() {
@@ -795,13 +992,27 @@ impl App {
             other => {
                 self.editing = false;
                 let _ = std::fs::remove_file(&path);
-                self.message = if matches!(other, Edited::Failed) { "editor failed: no change" } else { "no change" }.into();
+                self.message = if matches!(other, Edited::Failed) {
+                    "editor failed: no change"
+                } else {
+                    "no change"
+                }
+                .into();
                 return self.relayout();
             }
         };
         self.relayout();
-        let Some(i) = self.index_of(tab) else { return self.edit_written(path, false) };
-        self.tabs[i].view.evaluate(&edit::write_js(&text), move |r| send(Msg::EditWritten { path, ok: r.as_deref() == Ok("true") }));
+        let Some(i) = self.index_of(tab) else {
+            return self.edit_written(path, false);
+        };
+        self.tabs[i]
+            .view
+            .evaluate(&edit::write_js(&text), move |r| {
+                send(Msg::EditWritten {
+                    path,
+                    ok: r.as_deref() == Ok("true"),
+                })
+            });
     }
 
     fn edit_written(&mut self, path: PathBuf, ok: bool) {
@@ -848,7 +1059,10 @@ impl App {
                 if self.bindings.action(Scope::Insert, k) == Some(Action::Cancel) {
                     self.mode = Mode::Browse;
                     // Kept for `g e` after Esc (edit.rs `READ_JS`).
-                    self.view().evaluate("(e=>{window.__zwebLastEdit=e;e&&e.blur()})(document.activeElement)", |_| {});
+                    self.view().evaluate(
+                        "(e=>{window.__zwebLastEdit=e;e&&e.blur()})(document.activeElement)",
+                        |_| {},
+                    );
                     self.draw();
                 } else {
                     self.forward(&k);
@@ -880,10 +1094,12 @@ impl App {
         match action {
             Action::Quit => self.quit(),
             Action::QuitHint => {
-                self.message = format!("{} quits; {} or {} shows help",
+                self.message = format!(
+                    "{} quits; {} or {} shows help",
                     self.bindings.labels(Scope::Global, Action::Quit),
                     self.bindings.labels(Scope::Browse, Action::Help),
-                    self.bindings.labels(Scope::Global, Action::Help));
+                    self.bindings.labels(Scope::Global, Action::Help)
+                );
                 self.draw();
             }
             Action::CloseTab => self.close_tab(),
@@ -932,9 +1148,9 @@ impl App {
     fn jump_command(&mut self, action: Action) -> bool {
         match action {
             Action::Top => self.view().evaluate("scrollTo(0,0)", |_| {}),
-            Action::Bottom => {
-                self.view().evaluate("scrollTo(0,document.scrollingElement.scrollHeight)", |_| {})
-            }
+            Action::Bottom => self
+                .view()
+                .evaluate("scrollTo(0,document.scrollingElement.scrollHeight)", |_| {}),
             _ => return false,
         }
         true
@@ -954,7 +1170,9 @@ impl App {
     fn tab_command(&mut self, action: Action) -> bool {
         match action {
             Action::NextTab => self.switch((self.active + 1) % self.tabs.len()),
-            Action::PreviousTab => self.switch((self.active + self.tabs.len() - 1) % self.tabs.len()),
+            Action::PreviousTab => {
+                self.switch((self.active + self.tabs.len() - 1) % self.tabs.len())
+            }
             Action::Tab1 => self.switch(0),
             Action::Tab2 => self.switch(1),
             Action::Tab3 => self.switch(2),
@@ -990,7 +1208,11 @@ impl App {
             Action::FocusInput => {
                 let focus = "(()=>{const e=[...document.querySelectorAll('input:not([type=hidden]),textarea,[contenteditable]')]\
                     .find(e=>e.getClientRects().length);if(e){e.focus();return true}return false})()";
-                self.view().evaluate(focus, |r| send(Msg::Focused { ok: r.as_deref() == Ok("true") }));
+                self.view().evaluate(focus, |r| {
+                    send(Msg::Focused {
+                        ok: r.as_deref() == Ok("true"),
+                    })
+                });
             }
             Action::EditExternal if self.editing => {
                 self.message = "editor already open".into();
@@ -999,7 +1221,12 @@ impl App {
             Action::EditExternal => {
                 self.editing = true;
                 let tab = self.tab().id;
-                self.view().evaluate(edit::READ_JS, move |r| send(Msg::EditText { tab, json: r.map_err(|e| e.to_string()) }));
+                self.view().evaluate(edit::READ_JS, move |r| {
+                    send(Msg::EditText {
+                        tab,
+                        json: r.map_err(|e| e.to_string()),
+                    })
+                });
             }
             Action::Insert => self.mode = Mode::Insert,
             Action::Hints => self.start_hints(false),
@@ -1028,7 +1255,8 @@ impl App {
             Action::FocusPrevious => KeyCode::BackTab,
             Action::Activate => KeyCode::Enter,
             Action::PageEscape => {
-                self.view().evaluate("window.__zwebSearch?.mark('')", |_| {});
+                self.view()
+                    .evaluate("window.__zwebSearch?.mark('')", |_| {});
                 KeyCode::Esc
             }
             _ => return,
@@ -1050,12 +1278,21 @@ impl App {
             t.view.add_script(&js);
             t.view.evaluate(&js, |_| {});
         }
-        self.message = if self.opts.placeholders { "images: placeholders" } else { "images: shown" }.into();
+        self.message = if self.opts.placeholders {
+            "images: placeholders"
+        } else {
+            "images: shown"
+        }
+        .into();
     }
 
     fn wheel(&mut self, dx: f32, dy: f32) {
         let l = self.layout();
-        let (x, y) = if self.mouse == (0.0, 0.0) { (l.css_w as f32 / 2.0, l.css_h as f32 / 2.0) } else { self.mouse };
+        let (x, y) = if self.mouse == (0.0, 0.0) {
+            (l.css_w as f32 / 2.0, l.css_h as f32 / 2.0)
+        } else {
+            self.mouse
+        };
         self.scroll_at(x, y, dx, dy, Modifiers::NONE);
     }
 
@@ -1069,7 +1306,8 @@ impl App {
         if dx == 0.0 {
             self.predict(dy);
         }
-        self.view().send_wheel(x, y, dx, dy, false, WheelPhase::None, mods);
+        self.view()
+            .send_wheel(x, y, dx, dy, false, WheelPhase::None, mods);
         crate::trace!("wheel sent {dy} at {}", crate::trace::ticks_us());
         self.query_extents();
         self.schedule_prepare();
@@ -1080,12 +1318,20 @@ impl App {
         let k = (dy / self.row_css).round() as i32;
         // Any step: the renderer shows it only when it knows the rows it brings.
         let small = k != 0 && k.unsigned_abs() < l.rows as u32;
-        let browsing = self.mode != Mode::Hint && !self.help && self.prompt.is_none() && !self.tab().popup;
+        let browsing =
+            self.mode != Mode::Hint && !self.help && self.prompt.is_none() && !self.tab().popup;
         // Only where the page itself scrolls the whole step.
-        let Some((sy, ih, sh)) = self.extents else { return };
+        let Some((sy, ih, sh)) = self.extents else {
+            return;
+        };
         let room = if dy > 0.0 { sh - ih - sy } else { sy };
         let off = std::env::var_os("ZWEB_NOPREDICT").is_some();
-        if small && browsing && !off && room >= dy.abs() && self.renderer.gfx != crate::render::Gfx::Blocks {
+        if small
+            && browsing
+            && !off
+            && room >= dy.abs()
+            && self.renderer.gfx != crate::render::Gfx::Blocks
+        {
             // Shown only while predictions for this page are right (render.rs).
             self.renderer.predict(k);
             self.extents = Some((sy + dy, ih, sh));
@@ -1095,11 +1341,15 @@ impl App {
     fn schedule_prepare(&mut self) {
         self.prep_gen += 1;
         let gen = self.prep_gen;
-        zebkit::after(Duration::from_millis(200), move || send(Msg::Prepare { gen }));
+        zebkit::after(Duration::from_millis(200), move || {
+            send(Msg::Prepare { gen })
+        });
     }
 
     fn query_extents(&self) {
-        let Some(t) = self.tabs.get(self.active) else { return };
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
         let id = t.id;
         t.view.evaluate(
             "[scrollY, innerHeight, document.scrollingElement ? document.scrollingElement.scrollHeight : 0]",
@@ -1115,14 +1365,19 @@ impl App {
 
     fn find_next(&mut self, back: bool) {
         if self.find.is_empty() {
-            self.message = format!("Use {} or {} to find text in this page",
+            self.message = format!(
+                "Use {} or {} to find text in this page",
                 self.bindings.labels(Scope::Browse, Action::Find),
-                self.bindings.labels(Scope::Global, Action::Find));
+                self.bindings.labels(Scope::Global, Action::Find)
+            );
             return;
         }
         // The page may have changed since the prompt: define the helpers again.
         let lib = FIND_JS.split("\n// SEARCH SESSION").next().unwrap_or("");
-        let script = format!("{lib};__zwebSearch.step({}, {back})", serde_json::to_string(&self.find).unwrap());
+        let script = format!(
+            "{lib};__zwebSearch.step({}, {back})",
+            serde_json::to_string(&self.find).unwrap()
+        );
         self.run_find(&script, self.find.clone());
     }
 
@@ -1155,17 +1410,24 @@ impl App {
         let p = self.prompt.as_mut().unwrap();
         p.keep_open = keep_open;
         if keep_open {
-            p.hint = format!("Find in page; {} next, {} previous, {} closes",
+            p.hint = format!(
+                "Find in page; {} next, {} previous, {} closes",
                 self.bindings.labels(Scope::Prompt, Action::Accept),
                 self.bindings.labels(Scope::Prompt, Action::PreviousMatch),
-                self.bindings.labels(Scope::Prompt, Action::Cancel));
+                self.bindings.labels(Scope::Prompt, Action::Cancel)
+            );
         }
     }
 
     fn preview_find(&mut self) {
-        let Some(p) = self.prompt.as_ref().filter(|p| p.kind == PromptKind::Find) else { return };
+        let Some(p) = self.prompt.as_ref().filter(|p| p.kind == PromptKind::Find) else {
+            return;
+        };
         let query = p.input.text.clone();
-        let script = format!("window.__zwebFind.preview({})", serde_json::to_string(&query).unwrap());
+        let script = format!(
+            "window.__zwebFind.preview({})",
+            serde_json::to_string(&query).unwrap()
+        );
         self.run_find(&script, query);
     }
 
@@ -1174,7 +1436,12 @@ impl App {
         let generation = self.find_generation;
         let tab = self.tab().id;
         self.view().evaluate(script, move |result| {
-            send(Msg::Found { tab, generation, query, result: result.map(|s| s == "true").map_err(|e| e.to_string()) });
+            send(Msg::Found {
+                tab,
+                generation,
+                query,
+                result: result.map(|s| s == "true").map_err(|e| e.to_string()),
+            });
         });
     }
 
@@ -1195,7 +1462,11 @@ impl App {
                     }
                     p.not_found = not_found;
                 } else {
-                    self.message = if found { format!("/{query}") } else { format!("not found: {query}") };
+                    self.message = if found {
+                        format!("/{query}")
+                    } else {
+                        format!("not found: {query}")
+                    };
                 }
             }
         }
@@ -1211,9 +1482,22 @@ impl App {
         self.hint_typed.clear();
         self.hints.clear();
         let id = self.tab().id;
-        let kept = self.prepared.as_ref().filter(|p| p.0 == id).map_or("", |p| p.1.as_str());
-        let js = format!("{}window.__zwebHopKept={};{HINTS_JS}", self.hints_mode(), serde_json::to_string(kept).unwrap());
-        self.view().evaluate(&js, move |r| send(Msg::Hints { tab: id, reply: HintReply::Targets(r.map_err(|e| e.to_string())) }));
+        let kept = self
+            .prepared
+            .as_ref()
+            .filter(|p| p.0 == id)
+            .map_or("", |p| p.1.as_str());
+        let js = format!(
+            "{}window.__zwebHopKept={};{HINTS_JS}",
+            self.hints_mode(),
+            serde_json::to_string(kept).unwrap()
+        );
+        self.view().evaluate(&js, move |r| {
+            send(Msg::Hints {
+                tab: id,
+                reply: HintReply::Targets(r.map_err(|e| e.to_string())),
+            })
+        });
     }
 
     /// With Kitty graphics, hints.js gives the overlay as a terminal image:
@@ -1234,18 +1518,25 @@ impl App {
         self.hints.clear();
         self.hint_typed.clear();
         if let Some(t) = self.tabs.get(self.active) {
-            t.view.evaluate("window.__zwebHop && __zwebHop.clear()", |_| {});
+            t.view
+                .evaluate("window.__zwebHop && __zwebHop.clear()", |_| {});
         }
         self.schedule_prepare();
     }
 
     /// Keeps the codes that start with `typed`, showing what is left of them.
     fn show_hints(&self, typed: &str) {
-        let js = format!("window.__zwebHop && __zwebHop.show({})", serde_json::to_string(typed).unwrap());
+        let js = format!(
+            "window.__zwebHop && __zwebHop.show({})",
+            serde_json::to_string(typed).unwrap()
+        );
         let id = self.tab().id;
         self.view().evaluate(&js, move |r| {
             if let Some(json) = r.ok().and_then(|j| serde_json::from_str::<String>(&j).ok()) {
-                send(Msg::Hints { tab: id, reply: HintReply::Image(json) });
+                send(Msg::Hints {
+                    tab: id,
+                    reply: HintReply::Image(json),
+                });
             }
         });
     }
@@ -1274,7 +1565,9 @@ impl App {
             return self.draw();
         }
         let typed = self.hint_typed.clone();
-        let matches: Vec<usize> = (0..self.hints.len()).filter(|&i| self.hints[i].key.starts_with(&typed)).collect();
+        let matches: Vec<usize> = (0..self.hints.len())
+            .filter(|&i| self.hints[i].key.starts_with(&typed))
+            .collect();
         if matches.is_empty() && !self.hints.is_empty() {
             self.hint_typed.pop();
         } else if matches.len() == 1 && self.hints[matches[0]].key == typed {
@@ -1313,11 +1606,20 @@ impl App {
 
     fn start_visual(&mut self) {
         let tab = self.tab().id;
-        self.view().evaluate(VISUAL_START_JS, move |r| send(Msg::VisualStarted { tab, ok: r.as_deref() == Ok("true") }));
+        self.view().evaluate(VISUAL_START_JS, move |r| {
+            send(Msg::VisualStarted {
+                tab,
+                ok: r.as_deref() == Ok("true"),
+            })
+        });
     }
 
     fn visual_started(&mut self, tab: u64, ok: bool) {
-        if self.index_of(tab) != Some(self.active) || self.mode != Mode::Browse || self.prompt.is_some() || self.help {
+        if self.index_of(tab) != Some(self.active)
+            || self.mode != Mode::Browse
+            || self.prompt.is_some()
+            || self.help
+        {
             return;
         }
         if ok {
@@ -1330,11 +1632,16 @@ impl App {
 
     fn visual_key(&mut self, k: KeyEvent) {
         match self.bindings.action(Scope::Visual, k) {
-            Some(Action::Cancel) => self.view().evaluate("window.__zwebCaret?.collapse()", |_| {}),
+            Some(Action::Cancel) => self
+                .view()
+                .evaluate("window.__zwebCaret?.collapse()", |_| {}),
             Some(Action::Yank) => {
                 let tab = self.tab().id;
                 self.view().evaluate(YANK_JS, move |r| {
-                    send(Msg::Yanked { tab, text: r.ok().and_then(|j| serde_json::from_str(&j).ok()) })
+                    send(Msg::Yanked {
+                        tab,
+                        text: r.ok().and_then(|j| serde_json::from_str(&j).ok()),
+                    })
                 });
             }
             // Fire and forget: the selection's paint comes as a frame.
@@ -1371,7 +1678,14 @@ impl App {
     fn click(&mut self, x: f32, y: f32, count: u32) {
         let v = self.view();
         v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, Modifiers::NONE);
-        v.send_mouse(ZMouse::Down, x, y, MouseButton::Left, count, Modifiers::NONE);
+        v.send_mouse(
+            ZMouse::Down,
+            x,
+            y,
+            MouseButton::Left,
+            count,
+            Modifiers::NONE,
+        );
         v.send_mouse(ZMouse::Up, x, y, MouseButton::Left, count, Modifiers::NONE);
     }
 
@@ -1385,18 +1699,14 @@ impl App {
             }
             return;
         }
-        let Some((x, y)) = self.to_css(m.column, m.row) else { return };
+        let Some((x, y)) = self.to_css(m.column, m.row) else {
+            return;
+        };
         self.mouse = (x, y);
         self.page_mouse_event(m.kind, x, y, m.modifiers);
     }
 
-    fn page_mouse_event(
-        &mut self,
-        kind: MouseEventKind,
-        x: f32,
-        y: f32,
-        modifiers: KeyModifiers,
-    ) {
+    fn page_mouse_event(&mut self, kind: MouseEventKind, x: f32, y: f32, modifiers: KeyModifiers) {
         let mut mods = Modifiers::NONE;
         if modifiers.contains(KeyModifiers::SHIFT) {
             mods = mods | Modifiers::SHIFT;
@@ -1418,18 +1728,34 @@ impl App {
             MouseEventKind::ScrollDown => self.scroll_at(x, y, 0.0, line, mods),
             MouseEventKind::ScrollUp => self.scroll_at(x, y, 0.0, -line, mods),
             MouseEventKind::Down(b) => self.mouse_down(&v, x, y, button(b), mods),
-            MouseEventKind::Up(b) => v.send_mouse(ZMouse::Up, x, y, button(b), self.last_click.3, mods),
-            MouseEventKind::Drag(_) => v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, mods | Modifiers::LEFT_BUTTON),
+            MouseEventKind::Up(b) => {
+                v.send_mouse(ZMouse::Up, x, y, button(b), self.last_click.3, mods)
+            }
+            MouseEventKind::Drag(_) => v.send_mouse(
+                ZMouse::Move,
+                x,
+                y,
+                MouseButton::None,
+                0,
+                mods | Modifiers::LEFT_BUTTON,
+            ),
             MouseEventKind::Moved => v.send_mouse(ZMouse::Move, x, y, MouseButton::None, 0, mods),
-            MouseEventKind::ScrollRight => v.send_wheel(x, y, line, 0.0, false, WheelPhase::None, mods),
-            MouseEventKind::ScrollLeft => v.send_wheel(x, y, -line, 0.0, false, WheelPhase::None, mods),
+            MouseEventKind::ScrollRight => {
+                v.send_wheel(x, y, line, 0.0, false, WheelPhase::None, mods)
+            }
+            MouseEventKind::ScrollLeft => {
+                v.send_wheel(x, y, -line, 0.0, false, WheelPhase::None, mods)
+            }
         }
     }
 
     fn mouse_down(&mut self, view: &View, x: f32, y: f32, button: MouseButton, mods: Modifiers) {
         self.leave_hint_or_visual();
         let (at, lx, ly, n) = self.last_click;
-        let count = if at.elapsed() < Duration::from_millis(400) && (lx - x).abs() < 4.0 && (ly - y).abs() < 4.0 {
+        let count = if at.elapsed() < Duration::from_millis(400)
+            && (lx - x).abs() < 4.0
+            && (ly - y).abs() < 4.0
+        {
             n + 1
         } else {
             1
@@ -1452,7 +1778,10 @@ impl App {
 
     fn paste(&mut self, text: &str) {
         if let Some(p) = &mut self.prompt {
-            if matches!(p.kind, PromptKind::Dialog(_, DialogType::Confirm | DialogType::BeforeUnload)) {
+            if matches!(
+                p.kind,
+                PromptKind::Dialog(_, DialogType::Confirm | DialogType::BeforeUnload)
+            ) {
                 return;
             }
             p.input.insert(text.trim_end_matches(['\r', '\n']));
@@ -1473,9 +1802,11 @@ impl App {
             PromptKind::Open | PromptKind::OpenTab => "Address or web search",
             _ => "",
         };
-        let hint = format!("{task}; {} accepts, {} cancels",
+        let hint = format!(
+            "{task}; {} accepts, {} cancels",
             self.bindings.labels(Scope::Prompt, Action::Accept),
-            self.bindings.labels(Scope::Prompt, Action::Cancel));
+            self.bindings.labels(Scope::Prompt, Action::Cancel)
+        );
         let mut prompt = Prompt::new(kind, label, text);
         prompt.hint = hint;
         prompt.suggest(&self.history, history::now());
@@ -1485,7 +1816,10 @@ impl App {
     fn prompt_key(&mut self, k: KeyEvent) {
         let action = self.bindings.action(Scope::Prompt, k);
         let p = self.prompt.as_ref().unwrap();
-        let yes_no = matches!(p.kind, PromptKind::Dialog(_, DialogType::Confirm | DialogType::BeforeUnload));
+        let yes_no = matches!(
+            p.kind,
+            PromptKind::Dialog(_, DialogType::Confirm | DialogType::BeforeUnload)
+        );
         if yes_no {
             match input::character(k).map(|c| c.to_ascii_lowercase()) {
                 Some('y') => return self.prompt_done(true),
@@ -1508,12 +1842,22 @@ impl App {
                 let accept = p.keep_open && !p.input.text.is_empty();
                 return self.prompt_done(accept);
             }
-            Some(Action::Accept) if p.kind == PromptKind::Find && p.keep_open => return self.prompt_match(false),
+            Some(Action::Accept) if p.kind == PromptKind::Find && p.keep_open => {
+                return self.prompt_match(false)
+            }
             Some(Action::Accept) => return self.prompt_done(true),
-            Some(Action::PreviousMatch) if p.kind == PromptKind::Find => return self.prompt_match(true),
-            Some(Action::NextMatch) if p.kind == PromptKind::Find => return self.prompt_match(false),
+            Some(Action::PreviousMatch) if p.kind == PromptKind::Find => {
+                return self.prompt_match(true)
+            }
+            Some(Action::NextMatch) if p.kind == PromptKind::Find => {
+                return self.prompt_match(false)
+            }
             Some(action @ (Action::Complete | Action::CompletePrevious)) => {
-                p.complete(&self.history, action == Action::CompletePrevious, history::now());
+                p.complete(
+                    &self.history,
+                    action == Action::CompletePrevious,
+                    history::now(),
+                );
                 false
             }
             Some(action) if !yes_no => p.input.edit(action) == Edit::Changed,
@@ -1521,7 +1865,9 @@ impl App {
                 if let Some(c) = input::character(k) {
                     p.input.insert(&c.to_string());
                     true
-                } else { false }
+                } else {
+                    false
+                }
             }
             _ => false,
         };
@@ -1576,7 +1922,10 @@ impl App {
         if !accept {
             self.find_generation += 1;
         }
-        let script = format!("window.__zwebFind?.finish({accept}, {})", serde_json::to_string(&text).unwrap());
+        let script = format!(
+            "window.__zwebFind?.finish({accept}, {})",
+            serde_json::to_string(&text).unwrap()
+        );
         self.view().evaluate(&script, |result| {
             if let Err(error) = result {
                 eprintln!("webskiff: cannot finish page search: {error}");
@@ -1590,7 +1939,11 @@ impl App {
             self.find_next(false);
         } else {
             self.find = text;
-            self.message = if not_found { format!("not found: {}", self.find) } else { format!("/{}", self.find) };
+            self.message = if not_found {
+                format!("not found: {}", self.find)
+            } else {
+                format!("/{}", self.find)
+            };
         }
     }
 
@@ -1602,7 +1955,12 @@ impl App {
             .enumerate()
             .map(|(i, t)| {
                 let name = if t.title.is_empty() { &t.url } else { &t.title };
-                format!(" {}{} {} ", i + 1, if t.loading { "*" } else { "" }, clip(name, 24))
+                format!(
+                    " {}{} {} ",
+                    i + 1,
+                    if t.loading { "*" } else { "" },
+                    clip(name, 24)
+                )
             })
             .collect()
     }
@@ -1612,7 +1970,15 @@ impl App {
         let cols = cols as usize;
         let mut out = Vec::new();
         // Top: tabs.
-        let _ = queue!(out, cursor::MoveTo(0, 0), SetBackgroundColor(Color::Rgb { r: 40, g: 40, b: 48 }));
+        let _ = queue!(
+            out,
+            cursor::MoveTo(0, 0),
+            SetBackgroundColor(Color::Rgb {
+                r: 40,
+                g: 40,
+                b: 48
+            })
+        );
         let mut used = 0;
         for (i, label) in self.tab_labels().iter().enumerate() {
             let label = clip(label, cols.saturating_sub(used));
@@ -1621,30 +1987,76 @@ impl App {
             }
             used += label.width();
             if i == self.active {
-                let _ = queue!(out, SetAttribute(Attribute::Reverse), Print(&label), SetAttribute(Attribute::NoReverse));
+                let _ = queue!(
+                    out,
+                    SetAttribute(Attribute::Reverse),
+                    Print(&label),
+                    SetAttribute(Attribute::NoReverse)
+                );
             } else {
-                let _ = queue!(out, SetForegroundColor(Color::Grey), Print(&label), SetForegroundColor(Color::Reset));
+                let _ = queue!(
+                    out,
+                    SetForegroundColor(Color::Grey),
+                    Print(&label),
+                    SetForegroundColor(Color::Reset)
+                );
             }
         }
-        let _ = queue!(out, Print(" ".repeat(cols.saturating_sub(used))), ResetColor);
+        let _ = queue!(
+            out,
+            Print(" ".repeat(cols.saturating_sub(used))),
+            ResetColor
+        );
         // Bottom: mode, prompt or URL and message, frame stats.
         let row = rows.saturating_sub(1);
         let (tag, color) = self.status_tag();
-        let _ = queue!(out, cursor::MoveTo(0, row), SetBackgroundColor(color), SetForegroundColor(Color::Black), Print(tag), ResetColor);
+        let _ = queue!(
+            out,
+            cursor::MoveTo(0, row),
+            SetBackgroundColor(color),
+            SetForegroundColor(Color::Black),
+            Print(tag),
+            ResetColor
+        );
         let s = *self.renderer.stats.lock().unwrap();
-        let stats = format!(" {}x{} {:.0}ms {}KB {}new/{}moved ", s.width, s.height, s.last_ms, s.last_bytes / 1024, s.sent, s.moved);
+        let stats = format!(
+            " {}x{} {:.0}ms {}KB {}new/{}moved ",
+            s.width,
+            s.height,
+            s.last_ms,
+            s.last_bytes / 1024,
+            s.sent,
+            s.moved
+        );
         let room = cols.saturating_sub(tag.len() + stats.len() + 1);
         let (body, dim) = match &self.prompt {
             Some(p) => p.body(room),
-            None if self.mode == Mode::Hint => (format!(" type a hint: {}", self.hint_typed), String::new()),
-            None if !self.message.is_empty() => (format!(" {}  {}", self.message, self.tabs.get(self.active).map_or("", |t| &t.url)), String::new()),
-            None => (format!(" {}", self.tabs.get(self.active).map_or("", |t| &t.url)), String::new()),
+            None if self.mode == Mode::Hint => {
+                (format!(" type a hint: {}", self.hint_typed), String::new())
+            }
+            None if !self.message.is_empty() => (
+                format!(
+                    " {}  {}",
+                    self.message,
+                    self.tabs.get(self.active).map_or("", |t| &t.url)
+                ),
+                String::new(),
+            ),
+            None => (
+                format!(" {}", self.tabs.get(self.active).map_or("", |t| &t.url)),
+                String::new(),
+            ),
         };
         let body = clip(&body, room);
         let pad = room.saturating_sub(body.width() + dim.width());
         let _ = queue!(out, Print(&body));
         if !dim.is_empty() {
-            let _ = queue!(out, SetForegroundColor(Color::DarkGrey), Print(&dim), SetForegroundColor(Color::Reset));
+            let _ = queue!(
+                out,
+                SetForegroundColor(Color::DarkGrey),
+                Print(&dim),
+                SetForegroundColor(Color::Reset)
+            );
         }
         let _ = queue!(
             out,
@@ -1673,7 +2085,11 @@ impl App {
         let l = self.layout();
         let mut out = Vec::new();
         for r in 0..l.rows {
-            let _ = queue!(out, cursor::MoveTo(0, l.top + r), terminal::Clear(terminal::ClearType::CurrentLine));
+            let _ = queue!(
+                out,
+                cursor::MoveTo(0, l.top + r),
+                terminal::Clear(terminal::ClearType::CurrentLine)
+            );
         }
         self.renderer.write(&out);
     }
@@ -1693,8 +2109,18 @@ impl App {
         self.clear_page_area();
         let l = self.layout();
         let mut out = Vec::new();
-        for (i, line) in self.help_lines.iter().skip(self.help_offset).take(l.rows as usize).enumerate() {
-            let _ = queue!(out, cursor::MoveTo(2, l.top + i as u16), Print(clip(line, l.cols.saturating_sub(2) as usize)));
+        for (i, line) in self
+            .help_lines
+            .iter()
+            .skip(self.help_offset)
+            .take(l.rows as usize)
+            .enumerate()
+        {
+            let _ = queue!(
+                out,
+                cursor::MoveTo(2, l.top + i as u16),
+                Print(clip(line, l.cols.saturating_sub(2) as usize))
+            );
         }
         self.renderer.write(&out);
         self.draw();
@@ -1734,7 +2160,11 @@ fn load_history() -> History {
 }
 
 pub fn to_url(text: &str) -> std::io::Result<String> {
-    if text.contains("://") || text.starts_with("about:") || text.starts_with("data:") || text.starts_with("file:") {
+    if text.contains("://")
+        || text.starts_with("about:")
+        || text.starts_with("data:")
+        || text.starts_with("file:")
+    {
         return Ok(text.into());
     }
     if let Some(url) = local_file_url(text)? {
@@ -1746,7 +2176,9 @@ pub fn to_url(text: &str) -> std::io::Result<String> {
         let q: String = text
             .bytes()
             .map(|b| match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
                 b' ' => "+".into(),
                 _ => format!("%{b:02X}"),
             })
@@ -1764,7 +2196,10 @@ fn local_file_url(text: &str) -> std::io::Result<Option<String>> {
         Err(error) => return Err(error),
     };
     if !metadata.is_file() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "path is not a regular file"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path is not a regular file",
+        ));
     }
     let absolute = path.canonicalize()?;
     let encoded: String = absolute
@@ -1772,7 +2207,9 @@ fn local_file_url(text: &str) -> std::io::Result<Option<String>> {
         .as_encoded_bytes()
         .iter()
         .map(|&byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (byte as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                (byte as char).to_string()
+            }
             _ => format!("%{byte:02X}"),
         })
         .collect();
@@ -1793,7 +2230,9 @@ pub fn visual_script(action: Action) -> Option<String> {
         Action::LineEnd => ("forward", "lineboundary"),
         _ => return None,
     };
-    Some(format!("getSelection().modify('extend','{dir}','{unit}');__zwebCaret.reveal()"))
+    Some(format!(
+        "getSelection().modify('extend','{dir}','{unit}');__zwebCaret.reveal()"
+    ))
 }
 
 /// The terminal sequence that puts `text` on the clipboard.
@@ -1806,9 +2245,15 @@ fn osc52(text: &str) -> Vec<u8> {
 pub fn yank(text: &str) -> (Option<Vec<u8>>, String) {
     let encoded = text.len().div_ceil(3) * 4;
     if encoded > YANK_MAX {
-        return (None, format!("selection too large to copy ({encoded} bytes base64, max {YANK_MAX})"));
+        return (
+            None,
+            format!("selection too large to copy ({encoded} bytes base64, max {YANK_MAX})"),
+        );
     }
-    (Some(osc52(text)), format!("copied {} chars", text.chars().count()))
+    (
+        Some(osc52(text)),
+        format!("copied {} chars", text.chars().count()),
+    )
 }
 
 pub fn home() -> &'static str {
@@ -1816,7 +2261,11 @@ pub fn home() -> &'static str {
 }
 
 fn display_char(c: char) -> char {
-    if c.is_control() { '?' } else { c }
+    if c.is_control() {
+        '?'
+    } else {
+        c
+    }
 }
 
 fn clip(s: &str, width: usize) -> String {
@@ -1865,7 +2314,10 @@ mod tests {
 
     #[test]
     fn escapes_local_filename_url_characters() {
-        let path = std::env::temp_dir().join(format!("webskiff-{}-read me #100%?\u{00e9}.html", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "webskiff-{}-read me #100%?\u{00e9}.html",
+            std::process::id()
+        ));
         std::fs::write(&path, "<title>local file</title>").unwrap();
         let absolute = std::fs::canonicalize(&path).unwrap();
         let actual = to_url(path.to_str().unwrap());
@@ -1881,28 +2333,52 @@ mod tests {
 
     #[test]
     fn preserves_urls_hosts_and_searches() {
-        for url in ["https://example.com/a?q=b", "file:///tmp/page.html", "about:blank", "data:text/html,hello"] {
+        for url in [
+            "https://example.com/a?q=b",
+            "file:///tmp/page.html",
+            "about:blank",
+            "data:text/html,hello",
+        ] {
             assert_eq!(to_url(url).unwrap(), url);
         }
         assert_eq!(to_url("example.com").unwrap(), "https://example.com");
         assert_eq!(to_url("localhost:8080").unwrap(), "https://localhost:8080");
-        assert_eq!(to_url("terminal browser").unwrap(), "https://duckduckgo.com/?q=terminal+browser");
+        assert_eq!(
+            to_url("terminal browser").unwrap(),
+            "https://duckduckgo.com/?q=terminal+browser"
+        );
     }
 
     #[test]
     fn reports_missing_explicit_files_and_directories() {
-        let missing = std::env::temp_dir().join(format!("webskiff-{}-missing.html", std::process::id()));
+        let missing =
+            std::env::temp_dir().join(format!("webskiff-{}-missing.html", std::process::id()));
         assert!(!missing.exists());
-        assert_eq!(to_url(missing.to_str().unwrap()).unwrap_err().kind(), std::io::ErrorKind::NotFound);
-        assert_eq!(to_url(".").unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            to_url(missing.to_str().unwrap()).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            to_url(".").unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
     fn page_dialogs_cannot_write_terminal_controls() {
         use super::{clip, clip_start, DialogType, Prompt, PromptKind};
         let payload = "\x1b]52;c;UFdORUQ=\x07\x1b[2J\r\n\t\u{009b}2J";
-        let prompt = Prompt::new(PromptKind::Dialog(1, DialogType::Prompt), &format!("prompt: {payload}: "), payload);
-        for text in [prompt.body(200).0, prompt.body(18).0, clip(payload, 200), clip_start(payload, 12)] {
+        let prompt = Prompt::new(
+            PromptKind::Dialog(1, DialogType::Prompt),
+            &format!("prompt: {payload}: "),
+            payload,
+        );
+        for text in [
+            prompt.body(200).0,
+            prompt.body(18).0,
+            clip(payload, 200),
+            clip_start(payload, 12),
+        ] {
             assert!(!text.chars().any(char::is_control), "{text:?}");
         }
         assert_eq!(clip("Browser / café", 30), "Browser / café");
@@ -1924,9 +2400,14 @@ mod tests {
             ('0', "backward", "lineboundary"),
             ('$', "forward", "lineboundary"),
         ] {
-            let action = config.action(Scope::Visual, KeyEvent::from(KeyCode::Char(key))).unwrap();
+            let action = config
+                .action(Scope::Visual, KeyEvent::from(KeyCode::Char(key)))
+                .unwrap();
             let js = visual_script(action).unwrap();
-            assert!(js.contains(&format!("getSelection().modify('extend','{dir}','{unit}')")), "{key}: {js}");
+            assert!(
+                js.contains(&format!("getSelection().modify('extend','{dir}','{unit}')")),
+                "{key}: {js}"
+            );
         }
     }
 
@@ -1937,7 +2418,10 @@ mod tests {
         assert_eq!(bytes.as_deref(), Some(&b"\x1b]52;c;aGVsbG8=\x07"[..]));
         assert_eq!(status, "copied 5 chars");
         let (bytes, _) = yank(&"a".repeat(75_000));
-        assert_eq!(bytes.map(|b| b.len()), Some("\x1b]52;c;".len() + 100_000 + 1));
+        assert_eq!(
+            bytes.map(|b| b.len()),
+            Some("\x1b]52;c;".len() + 100_000 + 1)
+        );
         let (bytes, status) = yank(&"a".repeat(75_001));
         assert_eq!(bytes, None);
         assert!(status.contains("too large"), "{status}");
@@ -1977,7 +2461,10 @@ mod tests {
         let history = two_pages();
         let mut prompt = Prompt::new(PromptKind::Open, "open: ", "https://fi");
         prompt.suggest(&history, 1_000);
-        assert_eq!(prompt.body(200), (" open: https://fi█".to_string(), "rst.example/".to_string()));
+        assert_eq!(
+            prompt.body(200),
+            (" open: https://fi█".to_string(), "rst.example/".to_string())
+        );
         assert_eq!(prompt.body(22).1, "rst.");
         let mut other = Prompt::new(PromptKind::OpenTab, "new tab: ", "second");
         other.suggest(&history, 1_000);
