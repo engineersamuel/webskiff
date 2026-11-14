@@ -191,16 +191,6 @@ def until(keys, found, label=None, seconds=1.0):
     raise AssertionError(f"{keys!r}: expected output not seen in {seconds} s: {bytes(buffer[-3000:])!r}")
 
 
-def wait_for(marker, seconds=10):
-    output = bytearray()
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        output.extend(b"".join(data for _, data in pump(0.1)))
-        if marker in output:
-            return bytes(output)
-    raise AssertionError(f"{marker!r} not seen: {bytes(output[-3000:])!r}")
-
-
 def open_new_tab(url, marker):
     press(b"t", expected="NEW TAB")
     os.write(fd, url.encode() + b"\r")
@@ -220,7 +210,7 @@ def open_new_tab(url, marker):
 
 
 def open_titled_tab(title):
-    return open_new_tab(fixture + "?title=" + title.replace(" ", "+"), f" {title} ".encode())
+    return open_new_tab(fixture + "?title=" + title.replace(" ", "+"), f" {title} ")
 
 
 def tab_matches(query, title):
@@ -279,7 +269,7 @@ def pick_retitled_tab():
 
     The resize's own picker redraw comes before the page's resize event, so
     only the title change's redraw can show the new row."""
-    open_new_tab(fixture + "?retitle", b" Quokka ")
+    open_new_tab(fixture + "?retitle", " Quokka ")
     until(b"T", lambda raw: bool(picker_rows(raw)))
     os.write(fd, b"zbr")
     drain()
