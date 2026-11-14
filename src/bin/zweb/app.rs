@@ -21,10 +21,6 @@ use zebkit::offscreen::{Modifiers, MouseButton, MouseEvent as ZMouse, WheelPhase
 use zebkit::page::{Dialog, DialogPolicy, DialogType};
 use zebkit::{LoadEvent, View};
 
-#[cfg(not(test))]
-use zebkit::{after, View as TabView};
-#[cfg(test)]
-use jumps_tests::{after, TestView as TabView};
 use crate::config::{Action, Binding, Config, Scope, Stroke};
 use crate::edit::{self, Edited};
 use crate::history::{self, Completion, History, Saver};
@@ -32,6 +28,10 @@ use crate::input::{self, Edit, TextInput};
 use crate::jumps::{Jumps, NavOp, TabNav};
 use crate::keys;
 use crate::render::{Hop, Layout, Renderer};
+#[cfg(test)]
+use jumps_tests::{after, TestView as TabView};
+#[cfg(not(test))]
+use zebkit::{after, View as TabView};
 
 pub const HINTS_JS: &str = include_str!("hints.js");
 pub const FIND_JS: &str = include_str!("find.js");
@@ -929,7 +929,12 @@ impl App {
     pub fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Term(event) => self.terminal_event(event),
-            Msg::Load { tab, generation, event, url } => self.load_event(tab, generation, event, url),
+            Msg::Load {
+                tab,
+                generation,
+                event,
+                url,
+            } => self.load_event(tab, generation, event, url),
             Msg::Title { tab, title } => self.title_changed(tab, title),
             Msg::Caret { tab, on } => self.caret_changed(tab, on),
             Msg::Popup { tab, rect } => self.popup_changed(tab, rect),
@@ -1448,9 +1453,18 @@ impl App {
     /// Go to a jumplist entry: its tab, and its page if the tab has left it.
     fn jump(&mut self, back: bool) {
         let current = self.tab().nav.current();
-        let target = if back { self.jumps.back(current) } else { self.jumps.forward() };
+        let target = if back {
+            self.jumps.back(current)
+        } else {
+            self.jumps.forward()
+        };
         let Some((i, url)) = target.and_then(|t| Some((self.index_of(t.tab)?, t.url))) else {
-            self.message = if back { "no earlier jump" } else { "no later jump" }.into();
+            self.message = if back {
+                "no earlier jump"
+            } else {
+                "no later jump"
+            }
+            .into();
             return;
         };
         self.switch_inner(i, false);
@@ -2382,7 +2396,11 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let name = if t.title.is_empty() { t.url() } else { &t.title };
+                let name = if t.title.is_empty() {
+                    t.url()
+                } else {
+                    &t.title
+                };
                 format!(
                     " {}{} {} ",
                     i + 1,
@@ -2760,7 +2778,10 @@ mod jumps_tests {
 
     impl From<View> for TestView {
         fn from(real: View) -> Self {
-            Self { real: Some(real), ..Self::default() }
+            Self {
+                real: Some(real),
+                ..Self::default()
+            }
         }
     }
 
@@ -2768,7 +2789,9 @@ mod jumps_tests {
         type Target = View;
 
         fn deref(&self) -> &View {
-            self.real.as_ref().expect("unexpected engine operation in App test")
+            self.real
+                .as_ref()
+                .expect("unexpected engine operation in App test")
         }
     }
 
@@ -2785,19 +2808,38 @@ mod jumps_tests {
             self.calls.borrow_mut().push("close".into());
         }
 
-        pub fn go_back(&self) { self.calls.borrow_mut().push("back".into()); }
-        pub fn go_forward(&self) { self.calls.borrow_mut().push("forward".into()); }
-        pub fn reload(&self) { self.calls.borrow_mut().push("reload".into()); }
+        pub fn go_back(&self) {
+            self.calls.borrow_mut().push("back".into());
+        }
+        pub fn go_forward(&self) {
+            self.calls.borrow_mut().push("forward".into());
+        }
+        pub fn reload(&self) {
+            self.calls.borrow_mut().push("reload".into());
+        }
         pub fn set_focus(&self, _focused: bool) {}
         pub fn request_frame(&self) {}
-        pub fn evaluate(&self, _source: &str, _done: impl FnOnce(Result<String, zebkit::Error>) + 'static) {}
+        pub fn evaluate(
+            &self,
+            _source: &str,
+            _done: impl FnOnce(Result<String, zebkit::Error>) + 'static,
+        ) {
+        }
     }
 
     pub(super) fn after(_delay: Duration, _done: impl FnOnce() + 'static) {}
 
     fn app_with_tabs(urls: &[&str]) -> App {
         let renderer = Arc::new(Renderer::new(crate::render::Gfx::KittyDirect));
-        let mut app = App::new(renderer, Options { scale: None, placeholders: false, enhanced: false }, Config::default());
+        let mut app = App::new(
+            renderer,
+            Options {
+                scale: None,
+                placeholders: false,
+                enhanced: false,
+            },
+            Config::default(),
+        );
         for (i, url) in urls.iter().enumerate() {
             app.tabs.push(Tab {
                 nav: TabNav::new(i as u64 + 1, (*url).into()),
@@ -2814,7 +2856,12 @@ mod jumps_tests {
     }
 
     fn committed(app: &App, i: usize, url: &str) -> Msg {
-        Msg::Load { tab: app.tabs[i].id(), generation: app.tabs[i].load_generation.get(), event: LoadEvent::Committed, url: url.into() }
+        Msg::Load {
+            tab: app.tabs[i].id(),
+            generation: app.tabs[i].load_generation.get(),
+            event: LoadEvent::Committed,
+            url: url.into(),
+        }
     }
 
     fn visit(app: &mut App, i: usize, url: &str) {
@@ -2846,7 +2893,10 @@ mod jumps_tests {
         visit(&mut app, 0, "b");
         app.jump(false);
         assert_eq!(app.tabs[0].nav.current().url, "c");
-        assert_eq!(&*app.tabs[0].view.calls.borrow(), &["load b", "stop", "load a", "stop", "load b", "load c"]);
+        assert_eq!(
+            &*app.tabs[0].view.calls.borrow(),
+            &["load b", "stop", "load a", "stop", "load b", "load c"]
+        );
     }
 
     #[test]
@@ -2868,7 +2918,16 @@ mod jumps_tests {
         let mut app = restoring();
         app.extents = Some((0.0, 100.0, 200.0));
         app.mode = Mode::Hint;
-        app.prepared = Some((1, String::new(), Hop { png: String::new(), cells: Vec::new(), dim: [0; 4] }, Vec::new()));
+        app.prepared = Some((
+            1,
+            String::new(),
+            Hop {
+                png: String::new(),
+                cells: Vec::new(),
+                dim: [0; 4],
+            },
+            Vec::new(),
+        ));
         visit(&mut app, 0, "redirected-b");
         assert_eq!(app.tabs[0].url(), "redirected-b");
         assert!(app.extents.is_none());
@@ -2894,7 +2953,12 @@ mod jumps_tests {
     #[test]
     fn app_jumps_user_switch_cancels_restore_and_records_committed_url() {
         let mut app = restoring();
-        app.load_event(1, app.tab().load_generation.get(), LoadEvent::Started, "b".into());
+        app.load_event(
+            1,
+            app.tab().load_generation.get(),
+            LoadEvent::Started,
+            "b".into(),
+        );
         let stale = committed(&app, 0, "b");
         let generation = app.tab().load_generation.get();
         app.switch(1);
@@ -2909,7 +2973,13 @@ mod jumps_tests {
         assert_eq!(format!("{:?}", app.jumps), jumps);
         for url in ["c", "b", "a"] {
             let current = app.tab().nav.current();
-            assert_eq!(app.jumps.back(current), Some(crate::jumps::Jump { tab: 1, url: url.into() }));
+            assert_eq!(
+                app.jumps.back(current),
+                Some(crate::jumps::Jump {
+                    tab: 1,
+                    url: url.into()
+                })
+            );
         }
         let current = app.tab().nav.current();
         assert_eq!(app.jumps.back(current), None);
@@ -2918,7 +2988,11 @@ mod jumps_tests {
     #[test]
     fn app_jumps_switch_only_cancels_when_user_leaves_restore() {
         for (pending, record, index) in [(true, true, 0), (true, false, 1), (false, true, 1)] {
-            let mut app = if pending { restoring() } else { app_with_tabs(&["c", "x"]) };
+            let mut app = if pending {
+                restoring()
+            } else {
+                app_with_tabs(&["c", "x"])
+            };
             let generation = app.tab().load_generation.get();
             app.load_event(1, generation, LoadEvent::Started, "b".into());
             let current = app.tab().nav.current();
@@ -2933,30 +3007,49 @@ mod jumps_tests {
 
     fn cancelled_restore_ignores_queued_commit(action: Option<Action>, expected: &str) {
         let mut app = restoring();
-        app.load_event(1, app.tab().load_generation.get(), LoadEvent::Started, "b".into());
+        app.load_event(
+            1,
+            app.tab().load_generation.get(),
+            LoadEvent::Started,
+            "b".into(),
+        );
         let stale = committed(&app, 0, "b");
         let generation = app.tab().load_generation.get();
         match action {
             Some(action) => assert!(app.navigation_command(action)),
             None => {
                 app.prompt = Some(Prompt::new(
-                    PromptKind::Open, "open: ", "https://example.com/d",
+                    PromptKind::Open,
+                    "open: ",
+                    "https://example.com/d",
                 ));
                 app.prompt_done(true);
             }
         }
         assert_eq!(app.tab().view.calls.borrow().last().unwrap(), expected);
         if matches!(action, Some(Action::Back | Action::Forward)) {
-            assert_eq!(&*app.tab().view.calls.borrow(), &["load b", "stop", expected]);
+            assert_eq!(
+                &*app.tab().view.calls.borrow(),
+                &["load b", "stop", expected]
+            );
             assert!(!app.tab().loading);
         }
         assert_eq!(app.tab().load_generation.get(), generation + 1);
         assert!(!app.tab().nav.restoring());
-        let url = if action.is_none() { "https://example.com/d" } else { "c" };
+        let url = if action.is_none() {
+            "https://example.com/d"
+        } else {
+            "c"
+        };
         assert_eq!(app.tab().url(), url);
         let jumps = format!("{:?}", app.jumps);
         let prep_gen = app.prep_gen;
-        app.handle(Msg::Load { tab: app.tab().id(), generation, event: LoadEvent::Finished, url: "b".into() });
+        app.handle(Msg::Load {
+            tab: app.tab().id(),
+            generation,
+            event: LoadEvent::Finished,
+            url: "b".into(),
+        });
         assert_eq!(app.prep_gen, prep_gen);
         app.handle(stale);
         assert_eq!(app.tab().url(), url);
@@ -3030,8 +3123,13 @@ mod jumps_tests {
 
     #[test]
     fn app_jumps_failed_and_navigation_commands_clear_pending() {
-        for (action, expected) in [(None, ""), (Some(Action::Stop), "stop"), (Some(Action::Back), "back"),
-            (Some(Action::Forward), "forward"), (Some(Action::Reload), "reload")] {
+        for (action, expected) in [
+            (None, ""),
+            (Some(Action::Stop), "stop"),
+            (Some(Action::Back), "back"),
+            (Some(Action::Forward), "forward"),
+            (Some(Action::Reload), "reload"),
+        ] {
             let mut app = restoring();
             match action {
                 Some(action) => {
@@ -3039,7 +3137,12 @@ mod jumps_tests {
                     assert_eq!(app.tab().view.calls.borrow().last().unwrap(), expected);
                 }
                 None => {
-                    app.load_event(1, app.tab().load_generation.get(), LoadEvent::Failed, "b".into());
+                    app.load_event(
+                        1,
+                        app.tab().load_generation.get(),
+                        LoadEvent::Failed,
+                        "b".into(),
+                    );
                     assert_eq!(app.message, "load failed: b");
                     assert!(!app.tab().loading);
                 }
@@ -3076,11 +3179,21 @@ mod jumps_tests {
     fn app_help_uses_keyboard_enhancement_option() {
         for enhanced in [false, true] {
             let renderer = Arc::new(Renderer::new(crate::render::Gfx::KittyDirect));
-            let app = App::new(renderer, Options { scale: None, placeholders: false, enhanced }, Config::default());
-            assert_eq!(app.help_lines.iter().any(|line| line.contains("Ctrl-I")), enhanced);
+            let app = App::new(
+                renderer,
+                Options {
+                    scale: None,
+                    placeholders: false,
+                    enhanced,
+                },
+                Config::default(),
+            );
+            assert_eq!(
+                app.help_lines.iter().any(|line| line.contains("Ctrl-I")),
+                enhanced
+            );
         }
     }
-
 }
 
 fn display_char(c: char) -> char {
