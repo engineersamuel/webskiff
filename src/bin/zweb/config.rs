@@ -885,7 +885,10 @@ mod tests {
             ),
             Binding::Action(Action::Reload)
         ));
-        assert!(config.help_lines(false).iter().any(|line| line == "Leader: ;"));
+        assert!(config
+            .help_lines(false)
+            .iter()
+            .any(|line| line == "Leader: ;"));
     }
 
     #[test]
