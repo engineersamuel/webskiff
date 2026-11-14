@@ -10,6 +10,7 @@ import re
 import select
 import signal
 import struct
+import sys
 import tempfile
 import termios
 import time
@@ -140,6 +141,148 @@ def external_edit(mode, expected):
 def percentile(values, fraction):
     values = sorted(value for value in values if value is not None)
     return values[min(int(len(values) * fraction), len(values) - 1)] if values else None
+
+
+# A complete Kitty graphics command: its control keys, an optional payload.
+KITTY = re.compile(rb"\x1b_G([^;\x1b]*)(?:;[^\x1b]*)?\x1b\\")
+# A tab picker row: "<number>: <title or URL>" written at column 3.
+PICKER_ROW = re.compile(rb"\x1b\[\d+;3H(\d+): ([^\x1b\r\n]*)")
+# The active tab's label in the tab bar (reverse video).
+ACTIVE_TAB = re.compile(rb"\x1b\[7m (\d+)\*? ")
+
+
+def page_image(raw):
+    return any({b"a=T", b"a=p"} & set(m.group(1).split(b",")) for m in KITTY.finditer(raw))
+
+
+def picker_rows(raw):
+    return [(int(number), name.decode()) for number, name in PICKER_ROW.findall(raw)]
+
+
+def active_tab(raw):
+    tabs = ACTIVE_TAB.findall(raw)
+    assert tabs, f"no active tab in the browser chrome: {raw[-2000:]!r}"
+    return int(tabs[-1])
+
+
+def drain():
+    deadline = time.monotonic() + 2
+    while pump(0.03) and time.monotonic() < deadline:
+        pass
+
+
+def until(keys, found, label=None, seconds=1.0):
+    """Writes keys (or calls `keys`) after a drain; returns all output up to
+    `found` and 50 ms more.
+
+    The sample is from the key write to the read that completes `found`."""
+    drain()
+    buffer = bytearray()
+    start = time.monotonic()
+    keys() if callable(keys) else os.write(fd, keys)
+    while time.monotonic() < start + seconds:
+        if select.select([fd], [], [], 0.002)[0]:
+            buffer.extend(os.read(fd, 1 << 20))
+            if found(bytes(buffer)):
+                if label:
+                    samples.setdefault(label, []).append({"ms": (time.monotonic() - start) * 1000})
+                buffer.extend(b"".join(data for _, data in pump(0.05)))
+                return bytes(buffer)
+    raise AssertionError(f"{keys!r}: expected output not seen in {seconds} s: {bytes(buffer[-3000:])!r}")
+
+
+def open_new_tab(url, marker):
+    press(b"t", expected="NEW TAB")
+    os.write(fd, url.encode() + b"\r")
+    try:
+        return wait_for(marker, 5)
+    except AssertionError as first:
+        # Engine bug: a new tab sometimes stays stuck loading. Reload the same
+        # tab once, visibly; a second miss fails with both errors.
+        print(f"RETRY: first load of {url} not seen in 5 s; reloading the same tab. "
+              f"First attempt: {first}", file=sys.stderr, flush=True)
+        press(b"o", expected=" OPEN ")
+        os.write(fd, url.encode() + b"\r")
+        try:
+            return wait_for(marker)
+        except AssertionError as reload:
+            raise AssertionError(f"first attempt: {first}; reload: {reload}") from reload
+
+
+def open_titled_tab(title):
+    return open_new_tab(fixture + "?title=" + title.replace(" ", "+"), f" {title} ")
+
+
+def tab_matches(query, title):
+    """The app's tab filter (app.rs tab_matches) on a title: the query's
+    characters, in order and ignoring case."""
+    rest = iter(title.lower())
+    return all(character in rest for character in query.lower())
+
+
+def pick_tab(before, query, target, cancel=False, timed=False):
+    """Opens the tab picker in tab `before`, types `query`, which must list only
+    tab `target`, and closes with Esc or Enter. Returns the active tab after."""
+    raw = until(b"T", lambda raw: bool(picker_rows(raw)), timed and "picker open")
+    assert b" TABS " in raw, f"picker did not open: {raw[-2000:]!r}"
+    assert active_tab(raw) == before, f"active tab {active_tab(raw)} before the picker, not {before}"
+    if query:
+        # The app matches title + URL. A URL has no raw space, so a query that
+        # ends in a space matches in a title only, whatever the fixture path.
+        titles = picker_rows(raw)
+        assert query.endswith(" ") and [n for n, title in titles if tab_matches(query, title)] == [target], \
+            f"{query!r} must match the title of tab {target} only: {titles}"
+    for index, character in enumerate(query):
+        raw = until(character.encode(), lambda raw: bool(picker_rows(raw)), timed and index == 0 and "picker filter")
+    if query:
+        rows = picker_rows(raw)
+        assert [number for number, _ in rows] == [target], f"{query!r} lists {rows}, not only tab {target}"
+    key, label = (b"\x1b", "picker esc close") if cancel else (b"\r", "picker enter close")
+    raw = until(key, page_image, timed and label)
+    assert b" BROWSE " in raw and b" TABS " not in raw.split(b" BROWSE ")[-1], f"picker did not close: {raw[-2000:]!r}"
+    after = active_tab(raw)
+    assert after == (before if cancel else target), f"active tab {after}, before {before}, target {target}"
+    return after
+
+
+def set_size(rows, cols):
+    """Resizes the terminal, 16x32 pixel cells as at start; the browser gets SIGWINCH."""
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, cols * 16, rows * 32))
+
+
+def picker_survives_resize(active, tabs):
+    """A resize with the picker open redraws its rows for the new size, with
+    the page images still hidden; Esc then shows the page again."""
+    until(b"T", lambda raw: bool(picker_rows(raw)))
+    for rows, cols in ((30, 100), (50, 120), (40, 120)):
+        # The last page row (rows - 1) is cleared before the rows are drawn.
+        last = f"\x1b[{rows - 1};1H\x1b[2K".encode()
+        raw = until(lambda: set_size(rows, cols),
+                    lambda raw: last in raw and len(picker_rows(raw)) == tabs, seconds=3)
+        assert not page_image(raw), f"page image shown with the picker open at {rows}x{cols}"
+    raw = until(b"\x1b", page_image)
+    assert active_tab(raw) == active, f"active tab {active_tab(raw)} after Esc, not {active}"
+
+
+def pick_retitled_tab():
+    """A title change with the filtered picker open lists the tab; Enter picks it.
+
+    The resize's own picker redraw comes before the page's resize event, so
+    only the title change's redraw can show the new row."""
+    open_new_tab(fixture + "?retitle", " Quokka ")
+    until(b"T", lambda raw: bool(picker_rows(raw)))
+    os.write(fd, b"zbr")
+    drain()
+    # Only the redraw for the last character: "zbr" alone can match a URL.
+    os.write(fd, b" ")
+    raw = b"".join(data for _, data in pump(0.3))
+    assert b"zbr " in raw and picker_rows(raw) == [], f"'zbr ' lists {picker_rows(raw)} before the title change: {raw[-2000:]!r}"
+    # The page sets the title "Zebra Bay" on its resize event.
+    until(lambda: set_size(30, 100), lambda raw: b"\x1b[2;3H2: Zebra Bay" in raw, seconds=3)
+    raw = until(b"\r", page_image)
+    assert active_tab(raw) == 2, f"active tab {active_tab(raw)} after Enter, not 2"
+    set_size(40, 120)
+    press(b"x", expected="\x1b[7m 1")
 
 
 def wait_for_fixture(text=b"keyboard fixture", keys=None):
@@ -373,6 +516,16 @@ try:
         press(b"\x1b[9;6u", expected="\x1b[7m 1")
         press(b"\x1b[9;5u", expected="\x1b[7m 2")
         press(b"\x17", expected="keyboard fixture")
+        open_titled_tab("Zebra Bay")
+        assert active_tab(open_titled_tab("Quokka Cove")) == 3
+        active = pick_tab(3, "zbr ", 2)
+        pick_tab(active, "", active, cancel=True)
+        # Enter with no text keeps the current tab.
+        pick_tab(active, "", active)
+        picker_survives_resize(active, 3)
+        press(b"x")
+        press(b"x", expected="\x1b[7m 1")
+        pick_retitled_tab()
         print("KEYBOARD CHECKS PASSED")
         if args.check_only:
             # g e on a password field: refused, the editor does not run.
@@ -492,6 +645,13 @@ try:
         press(b"\r", "find enter")
         press(b"n", "find next")
         press(b"N", "find previous")
+    press(b"\x1b")
+    open_titled_tab("Zebra Bay")
+    active = active_tab(open_titled_tab("Quokka Cove"))
+    for _ in range(8):
+        query, target = ("zbr ", 2) if active == 3 else ("qkk ", 3)
+        active = pick_tab(active, query, target, timed=True)
+        pick_tab(active, "", active, cancel=True, timed=True)
     results = {}
     for label, rows in samples.items():
         results[label] = {

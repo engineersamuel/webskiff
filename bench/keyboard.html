@@ -23,6 +23,15 @@
   if (new URLSearchParams(location.search).has("tab")) {
     document.getElementById("first").textContent = "Second tab: alpha alphabet alpha";
   }
+  const title = new URLSearchParams(location.search).get("title");
+  if (title) {
+    document.title = title;
+  }
+  // The test resizes the terminal to change the title, with the picker open.
+  if (new URLSearchParams(location.search).has("retitle")) {
+    document.title = "Quokka";
+    addEventListener("resize", () => { document.title = "Zebra Bay"; });
+  }
   if (!location.search) {
     document.addEventListener("selectionchange", () => {
       const selection = getSelection();

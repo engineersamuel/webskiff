@@ -188,6 +188,7 @@ enum PromptKind {
     Open,
     OpenTab,
     Find,
+    Tabs,
     Dialog(u64, DialogType),
 }
 
@@ -312,6 +313,15 @@ impl Tab {
             self.loading = false;
             self.nav.clear_pending();
             self.load_generation.set(self.load_generation.get() + 1);
+        }
+    }
+
+    /// The title, or the URL while there is none.
+    fn name(&self) -> &str {
+        if self.title.is_empty() {
+            self.url()
+        } else {
+            &self.title
         }
     }
 }
@@ -675,7 +685,11 @@ impl App {
                 rows: page_rows,
                 css_w,
                 css_h,
-                hidden: self.help,
+                hidden: self.help
+                    || self
+                        .prompt
+                        .as_ref()
+                        .is_some_and(|p| p.kind == PromptKind::Tabs),
                 popup: l.popup,
             };
         }
@@ -688,6 +702,7 @@ impl App {
         if let Some(t) = self.tabs.get(self.active) {
             t.view.request_frame();
         }
+        self.draw_tab_picker();
         self.draw();
     }
 
@@ -1001,7 +1016,10 @@ impl App {
                 let tab = &mut self.tabs[i];
                 (tab.loading, tab.committed, tab.pending_title) = (true, false, None);
             }
-            LoadEvent::Committed => self.load_committed(i, url),
+            LoadEvent::Committed => {
+                self.load_committed(i, url);
+                self.draw_tab_picker();
+            }
             LoadEvent::Finished => {
                 self.tabs[i].loading = false;
                 if i == self.active {
@@ -1068,6 +1086,7 @@ impl App {
                 self.saver.changed(Instant::now());
             }
             tab.title = title;
+            self.draw_tab_picker();
             self.draw();
         }
     }
@@ -1589,6 +1608,11 @@ impl App {
                 self.prompt(PromptKind::Open, "open: ", &url)
             }
             Action::NewTab => self.prompt(PromptKind::OpenTab, "new tab: ", ""),
+            Action::TabPicker => {
+                self.prompt(PromptKind::Tabs, "tab: ", "");
+                self.hide_page();
+                self.draw_tab_picker();
+            }
             Action::Find => self.start_find(false),
             Action::NextMatch => self.find_next(false),
             Action::PreviousMatch => self.find_next(true),
@@ -2254,7 +2278,7 @@ impl App {
             }
             p.input.insert(text.trim_end_matches(['\r', '\n']));
             p.suggest(&self.history, history::now());
-            self.preview_find();
+            self.prompt_changed();
             return self.draw();
         }
         if self.mode == Mode::Insert || self.mode == Mode::Browse {
@@ -2268,6 +2292,7 @@ impl App {
         let task = match kind {
             PromptKind::Find => "Find in page",
             PromptKind::Open | PromptKind::OpenTab => "Address or web search",
+            PromptKind::Tabs => "Tab title or address",
             _ => "",
         };
         let hint = format!(
@@ -2313,6 +2338,7 @@ impl App {
             Some(Action::Accept) if p.kind == PromptKind::Find && p.keep_open => {
                 return self.prompt_match(false)
             }
+            Some(Action::Accept) if p.kind == PromptKind::Tabs => return self.pick_tab(),
             Some(Action::Accept) => return self.prompt_done(true),
             Some(Action::PreviousMatch) if p.kind == PromptKind::Find => {
                 return self.prompt_match(true)
@@ -2341,9 +2367,31 @@ impl App {
         };
         if changed {
             p.suggest(&self.history, history::now());
-            self.preview_find();
+            self.prompt_changed();
         }
         self.draw();
+    }
+
+    fn prompt_changed(&mut self) {
+        self.preview_find();
+        self.draw_tab_picker();
+    }
+
+    /// The first open tab that matches the picker's text, in tab order.
+    fn picked(&self, query: &str) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| tab_matches(query, &t.title, t.url()))
+    }
+
+    /// Enter in the tab picker: no match keeps it open.
+    fn pick_tab(&mut self) {
+        if self
+            .picked(&self.prompt.as_ref().unwrap().input.text)
+            .is_some()
+        {
+            self.prompt_done(true);
+        }
     }
 
     fn prompt_match(&mut self, back: bool) {
@@ -2376,6 +2424,13 @@ impl App {
                 }
             }
             PromptKind::Find => self.finish_find(accept, text, p.not_found),
+            PromptKind::Tabs => {
+                // Enter with no text keeps the current tab, as Esc does.
+                if let Some(i) = self.picked(&text).filter(|_| accept && !text.is_empty()) {
+                    self.switch(i);
+                }
+                self.show_page();
+            }
             PromptKind::Dialog(id, kind) => {
                 let text = (kind == DialogType::Prompt).then_some(text.as_str());
                 self.view().respond_dialog(id, accept, text);
@@ -2421,16 +2476,11 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let name = if t.title.is_empty() {
-                    t.url()
-                } else {
-                    &t.title
-                };
                 format!(
                     " {}{} {} ",
                     i + 1,
                     if t.loading { "*" } else { "" },
-                    clip(name, 24)
+                    clip(t.name(), 24)
                 )
             })
             .collect()
@@ -2594,6 +2644,7 @@ impl App {
             (Some(PromptKind::Find), _) => (" FIND ", Color::Cyan),
             (Some(PromptKind::Open), _) => (" OPEN ", Color::Cyan),
             (Some(PromptKind::OpenTab), _) => (" NEW TAB ", Color::Cyan),
+            (Some(PromptKind::Tabs), _) => (" TABS ", Color::Cyan),
             (Some(PromptKind::Dialog(..)), _) => (" DIALOG ", Color::Cyan),
             (_, Mode::Browse) => (" BROWSE ", Color::Blue),
             (_, Mode::Insert) => (" INSERT ", Color::Green),
@@ -2620,10 +2671,46 @@ impl App {
         self.help = true;
         self.help_offset = 0;
         self.pending_key = None;
-        self.renderer.layout.lock().unwrap().hidden = true;
-        // The images go first; the help text is queued after them.
-        self.renderer.clear_all();
+        self.hide_page();
         self.draw_help();
+    }
+
+    /// Hides the page images for text in the page area (help, tab picker).
+    fn hide_page(&self) {
+        self.renderer.layout.lock().unwrap().hidden = true;
+        // The images go first; the text is queued after them.
+        self.renderer.clear_all();
+    }
+
+    /// Clears the text in the page area and shows the active page again.
+    fn show_page(&mut self) {
+        self.schedule_prepare();
+        self.renderer.layout.lock().unwrap().hidden = false;
+        self.clear_page_area();
+        self.view().request_frame();
+    }
+
+    /// The open tabs that match the picker's text, one per page row.
+    fn draw_tab_picker(&self) {
+        let Some(p) = self.prompt.as_ref().filter(|p| p.kind == PromptKind::Tabs) else {
+            return;
+        };
+        self.clear_page_area();
+        let l = self.layout();
+        let mut out = Vec::new();
+        let matches = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| tab_matches(&p.input.text, &t.title, t.url()));
+        for (row, (i, t)) in matches.take(l.rows as usize).enumerate() {
+            let line = clip(
+                &format!("{}: {}", i + 1, t.name()),
+                l.cols.saturating_sub(2) as usize,
+            );
+            let _ = queue!(out, cursor::MoveTo(2, l.top + row as u16), Print(line));
+        }
+        self.renderer.write(&out);
     }
 
     fn draw_help(&self) {
@@ -2659,10 +2746,7 @@ impl App {
             Some(Action::Bottom) => self.help_offset = end,
             Some(Action::Cancel) => {
                 self.help = false;
-                self.schedule_prepare();
-                self.renderer.layout.lock().unwrap().hidden = false;
-                self.clear_page_area();
-                self.view().request_frame();
+                self.show_page();
                 return self.draw();
             }
             _ => return,
@@ -2826,6 +2910,22 @@ fn url_root(url: &str) -> Option<String> {
     let (base, _) = split_url(url)?;
     let root = format!("{base}/");
     (root != url).then_some(root)
+}
+
+/// The tab picker's filter: the query's characters, in order and ignoring
+/// case, somewhere in the tab's title followed by its URL.
+fn tab_matches(query: &str, title: &str, url: &str) -> bool {
+    let mut wanted = query.chars().flat_map(char::to_lowercase).peekable();
+    for c in title
+        .chars()
+        .chain(url.chars())
+        .flat_map(char::to_lowercase)
+    {
+        if wanted.peek() == Some(&c) {
+            wanted.next();
+        }
+    }
+    wanted.peek().is_none()
 }
 
 pub fn home() -> &'static str {
@@ -3744,5 +3844,17 @@ mod tests {
             pending.is_none(),
             "a `g` typed before the page focused a field stays pending"
         );
+    }
+
+    #[test]
+    fn tab_filter_is_a_case_insensitive_subsequence_of_title_and_url() {
+        use super::tab_matches;
+        // The URL has no "w" and no "k": only the title can match "wkp".
+        let url = "https://example.org/";
+        assert!(tab_matches("wkp", "Wikipedia", url));
+        assert!(tab_matches("WkP", "Wikipedia", url));
+        assert!(!tab_matches("zzz", "Wikipedia", url));
+        assert!(tab_matches("exorg", "", url));
+        assert!(tab_matches("", "Wikipedia", url));
     }
 }
