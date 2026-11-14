@@ -2939,11 +2939,9 @@ mod jumps_tests {
         match action {
             Some(action) => assert!(app.navigation_command(action)),
             None => {
-                app.prompt = Some(Prompt {
-                    kind: PromptKind::Open, label: "open: ".into(),
-                    input: TextInput::new("https://example.com/d"),
-                    not_found: false, keep_open: false, hint: String::new(),
-                });
+                app.prompt = Some(Prompt::new(
+                    PromptKind::Open, "open: ", "https://example.com/d",
+                ));
                 app.prompt_done(true);
             }
         }

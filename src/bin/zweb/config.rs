@@ -736,7 +736,7 @@ mod tests {
             Binding::Action(Action::EditExternal)
         ));
         assert!(config
-            .help_lines()
+            .help_lines(false)
             .contains(&"g e: Edit the text field in $EDITOR".to_string()));
     }
 
