@@ -814,7 +814,7 @@ mod tests {
             Binding::Unbound
         ));
         assert!(config
-            .help_lines()
+            .help_lines(false)
             .iter()
             .any(|line| line.contains("Leader: ,")));
     }
@@ -865,7 +865,7 @@ mod tests {
             Binding::Action(Action::Reload)
         ));
         assert!(config
-            .help_lines()
+            .help_lines(false)
             .iter()
             .any(|line| line.contains("Leader: ;")));
     }
@@ -885,7 +885,7 @@ mod tests {
             ),
             Binding::Action(Action::Reload)
         ));
-        assert!(config.help_lines().iter().any(|line| line == "Leader: ;"));
+        assert!(config.help_lines(false).iter().any(|line| line == "Leader: ;"));
     }
 
     #[test]
