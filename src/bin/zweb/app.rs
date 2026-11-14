@@ -1390,8 +1390,14 @@ impl App {
             Action::Forward => self.view().go_forward(),
             Action::Reload => self.view().reload(),
             Action::Stop => self.view().stop(),
-            Action::UrlUp => self.go_url(url_up(&self.tab().url), "already at the top of this address"),
-            Action::UrlRoot => self.go_url(url_root(&self.tab().url), "already at the root of this address"),
+            Action::UrlUp => self.go_url(
+                url_up(&self.tab().url),
+                "already at the top of this address",
+            ),
+            Action::UrlRoot => self.go_url(
+                url_root(&self.tab().url),
+                "already at the root of this address",
+            ),
             _ => return false,
         }
         true
@@ -2609,7 +2615,9 @@ fn split_url(url: &str) -> Option<(&str, &str)> {
         return None;
     }
     let start = scheme.len() + 3;
-    let end = url[start..].find(['/', '?', '#']).map_or(url.len(), |i| start + i);
+    let end = url[start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| start + i);
     Some(url.split_at(end))
 }
 
