@@ -318,7 +318,11 @@ impl Tab {
 
     /// The title, or the URL while there is none.
     fn name(&self) -> &str {
-        if self.title.is_empty() { self.url() } else { &self.title }
+        if self.title.is_empty() {
+            self.url()
+        } else {
+            &self.title
+        }
     }
 }
 
@@ -2375,12 +2379,17 @@ impl App {
 
     /// The first open tab that matches the picker's text, in tab order.
     fn picked(&self, query: &str) -> Option<usize> {
-        self.tabs.iter().position(|t| tab_matches(query, &t.title, t.url()))
+        self.tabs
+            .iter()
+            .position(|t| tab_matches(query, &t.title, t.url()))
     }
 
     /// Enter in the tab picker: no match keeps it open.
     fn pick_tab(&mut self) {
-        if self.picked(&self.prompt.as_ref().unwrap().input.text).is_some() {
+        if self
+            .picked(&self.prompt.as_ref().unwrap().input.text)
+            .is_some()
+        {
             self.prompt_done(true);
         }
     }
@@ -2683,13 +2692,22 @@ impl App {
 
     /// The open tabs that match the picker's text, one per page row.
     fn draw_tab_picker(&self) {
-        let Some(p) = self.prompt.as_ref().filter(|p| p.kind == PromptKind::Tabs) else { return };
+        let Some(p) = self.prompt.as_ref().filter(|p| p.kind == PromptKind::Tabs) else {
+            return;
+        };
         self.clear_page_area();
         let l = self.layout();
         let mut out = Vec::new();
-        let matches = self.tabs.iter().enumerate().filter(|(_, t)| tab_matches(&p.input.text, &t.title, t.url()));
+        let matches = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| tab_matches(&p.input.text, &t.title, t.url()));
         for (row, (i, t)) in matches.take(l.rows as usize).enumerate() {
-            let line = clip(&format!("{}: {}", i + 1, t.name()), l.cols.saturating_sub(2) as usize);
+            let line = clip(
+                &format!("{}: {}", i + 1, t.name()),
+                l.cols.saturating_sub(2) as usize,
+            );
             let _ = queue!(out, cursor::MoveTo(2, l.top + row as u16), Print(line));
         }
         self.renderer.write(&out);
@@ -2898,7 +2916,11 @@ fn url_root(url: &str) -> Option<String> {
 /// case, somewhere in the tab's title followed by its URL.
 fn tab_matches(query: &str, title: &str, url: &str) -> bool {
     let mut wanted = query.chars().flat_map(char::to_lowercase).peekable();
-    for c in title.chars().chain(url.chars()).flat_map(char::to_lowercase) {
+    for c in title
+        .chars()
+        .chain(url.chars())
+        .flat_map(char::to_lowercase)
+    {
         if wanted.peek() == Some(&c) {
             wanted.next();
         }
