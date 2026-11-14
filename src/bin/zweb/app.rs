@@ -2630,6 +2630,21 @@ mod tests {
     }
 
     #[test]
+    fn filter_follows_the_only_hint_left_only_on_an_accepted_key_or_enter() {
+        use super::{FilterKey::*, FilterStep::*, HintFilter};
+        let hints = filter_hints_of(r#"[{"k":"1","t":"solo"}]"#);
+        let mut f = HintFilter::default();
+        assert_eq!(f.key(&hints, Back), Some(Show(vec![0])));
+        assert_eq!(f.key(&hints, Char('z')), Some(Show(vec![0])));
+        assert_eq!(f.key(&hints, Accept), Some(Pick(0)));
+        assert_eq!(f.key(&hints, Char('s')), Some(Pick(0)));
+        // Queued keys too.
+        let mut f = HintFilter::default();
+        f.key(&[], Back);
+        assert_eq!(f.ready(&hints), Some(Show(vec![0])));
+    }
+
+    #[test]
     fn opens_existing_relative_and_absolute_files() {
         let path = std::fs::canonicalize("README.md").unwrap();
         let expected = format!("file://{}", path.display());

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import struct
@@ -20,6 +21,7 @@ parser.add_argument("--check", action="store_true")
 parser.add_argument("--config-check", action="store_true")
 parser.add_argument("--check-only", action="store_true")
 parser.add_argument("--enhanced-check", action="store_true")
+parser.add_argument("--hint-check", action="store_true")
 args = parser.parse_args()
 binary = str(Path(args.binary).resolve())
 fixture = Path(__file__).with_suffix(".html").resolve().as_uri()
@@ -50,6 +52,21 @@ editor.write_text(
     "esac\n"
 )
 editor.chmod(0o700)
+if args.hint_check:
+    # Page one: 12 links. Keys typed in insert mode make it busy (b), load
+    # itself later (m), or load page two while busy (n): hint replies come
+    # late or a load commits while `g f` is open.
+    links = "".join(f"<a href=#{i} onclick=\"document.title='picked {i}';return false\">item {i}</a><br>" for i in range(12))
+    Path(home.name, "a.html").write_text(
+        f"<title>keyboard fixture</title>{links}<script>const spin=()=>{{const t=Date.now()+1500;while(Date.now()<t);}};"
+        "addEventListener('keydown',e=>{if(e.key=='b')setTimeout(spin,0);"
+        "if(e.key=='m')setTimeout(()=>location.href='a.html?2',1000);"
+        "if(e.key=='n')setTimeout(()=>{location.href='b.html';spin()},0)})</script>"
+    )
+    Path(home.name, "b.html").write_text(
+        "<title>page two</title><a href=#s onclick=\"document.title='picked solo';return false\">solo</a>"
+    )
+    fixture = Path(home.name, "a.html").as_uri()
 pid, fd = pty.fork()
 if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 1920, 1280))
@@ -58,7 +75,7 @@ if pid == 0:
         os.environ.pop("VISUAL", None)
         os.environ["EDITOR"] = str(editor)
         os.environ["TMPDIR"] = str(edit_tmp)
-    if args.check or args.check_only or args.config_check or args.enhanced_check:
+    if args.check or args.check_only or args.config_check or args.enhanced_check or args.hint_check:
         # Stage times in the log printed on a failure; not for timing runs.
         os.environ["ZWEB_TRACE"] = "1"
     os.execv(binary, [binary, "--gfx", "kitty", fixture])
@@ -141,7 +158,7 @@ try:
         negotiation = b"".join(data for _, data in pump(0.25))
         assert b"\x1b[?u" in negotiation, f"no enhanced-keyboard query: {negotiation!r}"
         os.write(fd, b"\x1b[?1u\x1b[?62;c")
-    if args.check or args.check_only or args.config_check or args.enhanced_check:
+    if args.check or args.check_only or args.config_check or args.enhanced_check or args.hint_check:
         wait_for_fixture()
     else:
         pump(4)
@@ -167,6 +184,72 @@ try:
         pump(2)
         assert termios.tcgetattr(fd)[3] & raw_flags == original_flags & raw_flags, "terminal flags were not restored"
         print("ENHANCED KEYBOARD AND TERMINAL RESTORATION CHECKS PASSED")
+        raise SystemExit(0)
+    if args.hint_check:
+        def keys(*sequence):
+            for k in sequence:
+                os.write(fd, k)
+                time.sleep(0.05)
+
+        def drain(until=None, seconds=8):
+            """Output until `until` shows, then until 0.4 s of none."""
+            output, deadline = bytearray(), time.monotonic() + seconds
+            while until is not None and until not in output and time.monotonic() < deadline:
+                output.extend(b"".join(data for _, data in pump(0.05)))
+            while time.monotonic() < deadline:
+                chunk = b"".join(data for _, data in pump(0.4))
+                if not chunk:
+                    break
+                output.extend(chunk)
+            return bytes(output)
+
+        def shown(raw):
+            """The last `filter: N matches`, and hints placed after the last overlay change."""
+            matches = re.findall(rb"filter: [^\x1b]*?(\d+) matches", raw)
+            last = raw.rfind(b"\x1b_Ga=d,d=i,i=3,")
+            return int(matches[-1]) if matches else None, len(re.findall(rb"a=p,i=3,", raw[last:])) if last >= 0 else None
+
+        def arm(key):
+            keys(b"i", key, b"\x1b")
+            pump(0.2)
+
+        # F2: a late reply of an earlier session is not this session's.
+        arm(b"b")
+        keys(b"g", b"f", b"\x1b", b"g", b"f", b"1")
+        got = shown(drain(b"3 matches"))
+        assert got == (3, 3), f"g f, Esc, g f: a stale reply replaced the filtered hints: {got}"
+        keys(b"\x1b")
+        arm(b"b")
+        keys(b"f", b"\x1b", b"g", b"f", b"1")
+        got = shown(drain(b"3 matches"))
+        assert got == (3, 3), f"f, Esc, g f: a stale reply dropped the queued digit: {got}"
+        keys(b"\x1b")
+        # F1: keys of a session that a load ended do not apply to the next one.
+        arm(b"m")
+        keys(b"g", b"f")
+        drain(b"12 matches")
+        keys(b"1")
+        drain(b"a.html?2")
+        keys(b"g", b"f")
+        assert shown(drain(b"matches"))[0] == 12, "a digit typed before a load still filters the next g f"
+        keys(b"\x1b")
+        arm(b"n")
+        keys(b"g", b"f", b"1", b"\r")
+        drain(b"page two")
+        keys(b"g", b"f")
+        raw = drain(b"matches")
+        assert b"picked" not in raw, "keys queued before a load picked a hint in the next g f"
+        # F5: with one hint left, only an accepted key or Enter follows it.
+        for key in (b"\x7f", b"z"):
+            keys(key)
+            assert b"picked" not in drain(), f"{key!r} followed the only hint"
+        keys(b"\r")
+        assert b"picked solo" in drain(b"picked solo"), "Enter did not follow the only hint"
+        keys(b"g", b"f")
+        drain(b"matches")
+        keys(b"s")
+        assert b"picked solo" in drain(b"picked solo"), "an accepted letter did not follow the only hint"
+        print("HINT CHECKS PASSED")
         raise SystemExit(0)
     if args.config_check:
         assert b" FIND " not in press(b"/"), "disabled default still opens find"

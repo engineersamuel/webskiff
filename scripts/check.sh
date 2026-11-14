@@ -13,3 +13,4 @@ uv run --no-project python -I -m unittest discover -s scripts -p 'test_*.py'
 uv run --no-project python -I bench/keyboard.py target/release/webskiff --check-only
 uv run --no-project python -I bench/keyboard.py target/release/webskiff --config-check
 uv run --no-project python -I bench/keyboard.py target/release/webskiff --enhanced-check
+uv run --no-project python -I bench/keyboard.py target/release/webskiff --hint-check
