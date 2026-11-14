@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/engineersamuel/webskiff/compare/v0.8.1...v0.9.0) (2026-11-14)
+
+
+### Features
+
+* tab picker on T in browse mode ([#43](https://github.com/engineersamuel/webskiff/issues/43)) ([b823c87](https://github.com/engineersamuel/webskiff/commit/b823c874a83713fcfdb285f13fc75ddf8e1a8ce2))
+
 ## [0.8.1](https://github.com/engineersamuel/webskiff/compare/v0.8.0...v0.8.1) (2026-11-14)
 
 
