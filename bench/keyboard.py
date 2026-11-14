@@ -193,11 +193,11 @@ try:
         assert termios.tcgetattr(fd)[3] & raw_flags == 0, "raw mode was lost during search"
         # Jumplist: Ctrl-O goes back and Ctrl-I forward, within a tab and across tabs.
         press(b"o", expected="OPEN")
-        wait_for_fixture(b"jump page", (fixture + "?jump").encode() + b"\r")
+        wait_for_fixture(b"\x1b[7m 1 jump page", (fixture + "?jump").encode() + b"\r")
         wait_for_fixture(b"keyboard fixture", b"\x1b[111;5u")
         wait_for_fixture(b"jump page", b"\x1b[105;5u")
         press(b"t", expected="NEW TAB")
-        wait_for_fixture(b"\x1b[7m 2", (fixture + "?tab=2").encode() + b"\r")
+        wait_for_fixture(b"\x1b[7m 2 keyboard fixture", (fixture + "?tab=2").encode() + b"\r")
         wait_for_fixture(b"\x1b[7m 1", b"\x1b[111;5u")
         wait_for_fixture(b"\x1b[7m 2", b"\x1b[105;5u")
         press(b"\x1b[113;5u")
