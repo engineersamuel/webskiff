@@ -220,7 +220,14 @@ def open_new_tab(url, marker):
 
 
 def open_titled_tab(title):
-    return open_new_tab(fixture + "?title=" + title, f" {title} ".encode())
+    return open_new_tab(fixture + "?title=" + title.replace(" ", "+"), f" {title} ".encode())
+
+
+def tab_matches(query, title):
+    """The app's tab filter (app.rs tab_matches) on a title: the query's
+    characters, in order and ignoring case."""
+    rest = iter(title.lower())
+    return all(character in rest for character in query.lower())
 
 
 def pick_tab(before, query, target, cancel=False, timed=False):
@@ -229,6 +236,12 @@ def pick_tab(before, query, target, cancel=False, timed=False):
     raw = until(b"T", lambda raw: bool(picker_rows(raw)), timed and "picker open")
     assert b" TABS " in raw, f"picker did not open: {raw[-2000:]!r}"
     assert active_tab(raw) == before, f"active tab {active_tab(raw)} before the picker, not {before}"
+    if query:
+        # The app matches title + URL. A URL has no raw space, so a query that
+        # ends in a space matches in a title only, whatever the fixture path.
+        titles = picker_rows(raw)
+        assert query.endswith(" ") and [n for n, title in titles if tab_matches(query, title)] == [target], \
+            f"{query!r} must match the title of tab {target} only: {titles}"
     for index, character in enumerate(query):
         raw = until(character.encode(), lambda raw: bool(picker_rows(raw)), timed and index == 0 and "picker filter")
     if query:
@@ -262,15 +275,23 @@ def picker_survives_resize(active, tabs):
 
 
 def pick_retitled_tab():
-    """The picker lists a tab once its new title matches; Enter picks it."""
+    """A title change with the filtered picker open lists the tab; Enter picks it.
+
+    The resize's own picker redraw comes before the page's resize event, so
+    only the title change's redraw can show the new row."""
     open_new_tab(fixture + "?retitle", b" Quokka ")
     until(b"T", lambda raw: bool(picker_rows(raw)))
     os.write(fd, b"zbr")
-    rows = picker_rows(b"".join(data for _, data in pump(0.3)))
-    assert rows == [], f"'zbr' lists {rows} before the title change"
-    wait_for(b"\x1b[2;3H2: Zebra")
+    drain()
+    # Only the redraw for the last character: "zbr" alone can match a URL.
+    os.write(fd, b" ")
+    raw = b"".join(data for _, data in pump(0.3))
+    assert b"zbr " in raw and picker_rows(raw) == [], f"'zbr ' lists {picker_rows(raw)} before the title change: {raw[-2000:]!r}"
+    # The page sets the title "Zebra Bay" on its resize event.
+    until(lambda: set_size(30, 100), lambda raw: b"\x1b[2;3H2: Zebra Bay" in raw, seconds=3)
     raw = until(b"\r", page_image)
     assert active_tab(raw) == 2, f"active tab {active_tab(raw)} after Enter, not 2"
+    set_size(40, 120)
     press(b"x", expected="\x1b[7m 1")
 
 
@@ -505,9 +526,9 @@ try:
         press(b"\x1b[9;6u", expected="\x1b[7m 1")
         press(b"\x1b[9;5u", expected="\x1b[7m 2")
         press(b"\x17", expected="keyboard fixture")
-        open_titled_tab("Zebra")
-        assert active_tab(open_titled_tab("Quokka")) == 3
-        active = pick_tab(3, "zbr", 2)
+        open_titled_tab("Zebra Bay")
+        assert active_tab(open_titled_tab("Quokka Cove")) == 3
+        active = pick_tab(3, "zbr ", 2)
         pick_tab(active, "", active, cancel=True)
         # Enter with no text keeps the current tab.
         pick_tab(active, "", active)
@@ -635,10 +656,10 @@ try:
         press(b"n", "find next")
         press(b"N", "find previous")
     press(b"\x1b")
-    open_titled_tab("Zebra")
-    active = active_tab(open_titled_tab("Quokka"))
+    open_titled_tab("Zebra Bay")
+    active = active_tab(open_titled_tab("Quokka Cove"))
     for _ in range(8):
-        query, target = ("zbr", 2) if active == 3 else ("qkk", 3)
+        query, target = ("zbr ", 2) if active == 3 else ("qkk ", 3)
         active = pick_tab(active, query, target, timed=True)
         pick_tab(active, "", active, cancel=True, timed=True)
     results = {}

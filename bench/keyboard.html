@@ -27,10 +27,10 @@
   if (title) {
     document.title = title;
   }
-  // The URL has no "z": only the later title matches "zbr".
+  // The test resizes the terminal to change the title, with the picker open.
   if (new URLSearchParams(location.search).has("retitle")) {
     document.title = "Quokka";
-    setTimeout(() => { document.title = "Zebra"; }, 3000);
+    addEventListener("resize", () => { document.title = "Zebra Bay"; });
   }
   if (!location.search) {
     document.addEventListener("selectionchange", () => {
