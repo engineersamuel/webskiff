@@ -941,7 +941,7 @@ impl App {
         }
         if i == self.active {
             if self.mode == Mode::Hint {
-                self.clear_hints();
+                self.reset_hints();
             }
             if self.mode == Mode::Visual {
                 self.tabs[i].view.evaluate(COLLAPSE_JS, |_| {});
@@ -1714,6 +1714,13 @@ impl App {
     }
 
     fn clear_hints(&mut self) {
+        self.reset_hints();
+        self.schedule_prepare();
+    }
+
+    /// Removes the hints, and reads none ahead: a page that just committed
+    /// is read when it has loaded.
+    fn reset_hints(&mut self) {
         if !self.hints.is_empty() {
             self.renderer.hop(None);
         }
@@ -1726,7 +1733,6 @@ impl App {
             t.view
                 .evaluate("window.__zwebHop && __zwebHop.clear()", |_| {});
         }
-        self.schedule_prepare();
     }
 
     /// Keeps the codes that start with `typed`, showing what is left of them.
