@@ -7,6 +7,9 @@
 # Prompt editing keys take priority over global keys. Global quit always works.
 # Restart Webskiff after changing this file.
 
+# Leader key for "Leader <key>" browse sequences (e.g. `# reload = ["Leader r"]`).
+leader = ","
+
 [keys.global]
 quit = ["Ctrl-Q"]
 find = ["Ctrl-F"]

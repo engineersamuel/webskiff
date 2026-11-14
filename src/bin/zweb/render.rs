@@ -26,6 +26,15 @@ pub enum Gfx {
     Blocks,
 }
 
+impl Gfx {
+    /// Whether the popup going from `old` to `new` rows needs a new page
+    /// frame. Kitty places the uncovered tiles again from its copies;
+    /// blocks have none.
+    pub fn uncover_needs_frame(self, old: u16, new: u16) -> bool {
+        self == Gfx::Blocks && new < old
+    }
+}
+
 /// Where the page is on screen, and its size in CSS pixels.
 #[derive(Clone, Copy, Default)]
 pub struct Layout {
@@ -63,6 +72,13 @@ struct Pending {
     /// Forget what was learned of the page (new page, other tab).
     forget: bool,
     clear_popup: bool,
+    /// Page rows to leave to text at the bottom (the prefix popup), or Some(0).
+    cover: Option<u16>,
+    /// The most rows any cover in this batch left to text: its text is
+    /// queued too, so those rows are covered first, then given back.
+    cover_peak: u16,
+    /// With cover Some(0): the next page frame places the uncovered rows.
+    uncover_by_frame: bool,
     /// The hint overlay to show, or Some(None) to remove it.
     hop: Option<Option<Hop>>,
     clear_all: bool,
@@ -96,6 +112,8 @@ pub struct Hop {
 }
 /// After this long with no new frame, photo tiles sent blurry are sent sharp.
 const REFINE_AFTER: Duration = Duration::from_millis(120);
+/// How long closed popup rows wait for the action's frame to place them.
+const UNCOVER_WAIT: Duration = Duration::from_millis(8);
 
 /// A new tile to send.
 struct Part {
@@ -108,6 +126,8 @@ struct Part {
     inner: (usize, usize, usize, usize),
     src: String,
     id: u32,
+    /// Placed as sent (a=T), or only sent (a=t).
+    show: bool,
     place: String,
     rgb: Vec<u8>,
     hash: u64,
@@ -384,6 +404,10 @@ struct Rows {
     drawn_at: Instant,
     /// Hash of the hint overlay the terminal holds: shown again, it is only placed.
     hop_sent: Option<u64>,
+    /// Bottom page rows left to text: no tiles are placed there.
+    cover: u16,
+    /// Uncovered, but left for the next page frame to place, until then.
+    uncover_at: Option<Instant>,
 }
 
 impl Rows {
@@ -406,6 +430,8 @@ impl Rows {
             refine: HashMap::new(),
             drawn_at: Instant::now(),
             hop_sent: None,
+            cover: 0,
+            uncover_at: None,
         }
     }
 
@@ -429,13 +455,74 @@ impl Rows {
         (r as u16, col(b), col(b + 1) - col(b))
     }
 
+    /// Whether tile `t` is under the bottom rows left to text.
+    fn covered(&self, t: usize) -> bool {
+        self.under(t, self.cover)
+    }
+
+    fn under(&self, t: usize, cover: u16) -> bool {
+        t / self.bands + cover as usize >= self.shown.len() / self.bands
+    }
+
+    /// Leaves the bottom `n` page rows to text. Kitty: a covered tile keeps
+    /// its hash in `shown` but loses its placement, and is placed again from
+    /// the terminal's copy when uncovered. Blocks have no copy: covered rows
+    /// are drawn again by the next frame.
+    fn set_cover(&mut self, out: &mut Vec<u8>, layout: &Layout, n: u16, kitty: bool) {
+        self.uncover_at = None;
+        let old = std::mem::replace(&mut self.cover, n);
+        for t in 0..self.shown.len() {
+            let (was, now) = (self.under(t, old), self.covered(t));
+            if was == now {
+                continue;
+            }
+            if !kitty {
+                self.shown[t] = None;
+            } else if now {
+                self.unplace(out, t, self.shown[t]);
+            } else if let Some(hash) = self.shown[t] {
+                self.put(out, layout, t, hash);
+            }
+        }
+    }
+
+    /// Uncovers for a new frame of tiles `hashes`: a covered tile it keeps is
+    /// placed again now, a changed one is left for the frame to place.
+    fn uncover_into(&mut self, out: &mut Vec<u8>, layout: &Layout, hashes: &[u64]) {
+        for (t, hash) in hashes.iter().enumerate() {
+            if self.covered(t) && self.shown[t] != Some(*hash) {
+                self.shown[t] = None;
+            }
+        }
+        self.set_cover(out, layout, 0, true);
+    }
+
     /// Puts image `hash` (a cached tile, or BLANK) at tile `t`, then removes
-    /// what was there. Returns whether a placement was written.
+    /// what was there; a covered tile only keeps the hash, to be placed when
+    /// uncovered. Returns whether the tile now shows `hash`.
     fn place(&mut self, out: &mut Vec<u8>, layout: &Layout, t: usize, hash: u64) -> bool {
         let old = self.shown[t];
         if old == Some(hash) {
             return false;
         }
+        if self.covered(t) {
+            let known = hash == BLANK || self.cache.contains_key(&hash);
+            if known {
+                self.shown[t] = Some(hash);
+            }
+            return known;
+        }
+        if !self.put(out, layout, t, hash) {
+            return false;
+        }
+        self.unplace(out, t, old);
+        self.shown[t] = Some(hash);
+        true
+    }
+
+    /// Writes a placement of image `hash` (a cached tile, or BLANK) at tile
+    /// `t`. Returns whether it was written.
+    fn put(&mut self, out: &mut Vec<u8>, layout: &Layout, t: usize, hash: u64) -> bool {
         let id = if hash == BLANK {
             BG_ID
         } else {
@@ -457,8 +544,6 @@ impl Rows {
             )
             .as_bytes(),
         );
-        self.unplace(out, t, old);
-        self.shown[t] = Some(hash);
         true
     }
 
@@ -475,14 +560,17 @@ impl Rows {
     }
 
     fn has_blurry_tiles(&self) -> bool {
-        self.refine.keys().any(|h| self.shown.contains(&Some(*h)))
+        (0..self.shown.len()).any(|t| {
+            !self.covered(t) && self.shown[t].is_some_and(|h| self.refine.contains_key(&h))
+        })
     }
 
     fn wake_deadline(&self) -> Option<Instant> {
         let refine = self
             .has_blurry_tiles()
             .then(|| self.drawn_at + REFINE_AFTER);
-        self.prediction.as_ref().map(|pr| pr.deadline).or(refine)
+        let first = self.prediction.as_ref().map(|pr| pr.deadline).or(refine);
+        first.into_iter().chain(self.uncover_at).min()
     }
 
     fn prediction_target(&self, total: i32) -> Vec<u64> {
@@ -550,7 +638,13 @@ impl Rows {
         let inner = (x0 - bx0, y0 - by0, x1 - x0, y1 - y0);
         let src = format!("x={},y={},w={},h={},", inner.0, inner.1, inner.2, inner.3);
         out.extend_from_slice(format!("\x1b[{};{}H", layout.top + r + 1, col + 1).as_bytes());
-        let place = format!("p={},c={cols},r=1,C=1,q=2", t + 1);
+        // Covered: sent now, placed when uncovered.
+        let show = !self.covered(t);
+        let place = if show {
+            format!("p={},c={cols},r=1,C=1,q=2", t + 1)
+        } else {
+            "q=2".to_string()
+        };
         let size = rgb.len();
         self.cache.insert(
             hash,
@@ -568,13 +662,16 @@ impl Rows {
             inner,
             src,
             id,
+            show,
             place,
             rgb,
             hash,
         };
         self.bytes += size;
         // Delete the previous placement only after the new image is sent.
-        self.unplace(out, t, self.shown[t]);
+        if show {
+            self.unplace(out, t, self.shown[t]);
+        }
         self.shown[t] = Some(hash);
         part
     }
@@ -692,6 +789,7 @@ impl Pending {
             || !self.text.is_empty()
             || self.predict != 0
             || self.clear_popup
+            || self.cover.is_some()
             || self.hop.is_some()
             || self.clear_all
             || self.forget
@@ -752,6 +850,25 @@ impl Renderer {
         self.wake.notify_one();
     }
 
+    /// Leaves the bottom `rows` page rows to text; 0 gives them back.
+    pub fn cover(&self, rows: u16) {
+        let mut p = self.pending.lock().unwrap();
+        p.cover = Some(rows);
+        p.cover_peak = p.cover_peak.max(rows);
+        p.uncover_by_frame = false;
+        self.wake.notify_one();
+    }
+
+    /// Gives the covered rows back, placed by the next page frame (an
+    /// action that changes the page follows), or from the terminal's copies
+    /// if none comes in UNCOVER_WAIT. Kitty only.
+    pub fn uncover_by_frame(&self) {
+        let mut p = self.pending.lock().unwrap();
+        p.cover = Some(0);
+        p.uncover_by_frame = true;
+        self.wake.notify_one();
+    }
+
     /// Removes every image (before the help screen, a resize, quitting); the
     /// next page frame is drawn whole. Text queued after this goes after it.
     pub fn clear_all(&self) {
@@ -784,6 +901,11 @@ impl Renderer {
             };
             if let Some(frame) = page {
                 self.draw_page(&frame, &layout, &mut rows);
+            }
+            if rows.uncover_at.is_some_and(|at| Instant::now() >= at) {
+                let mut out = Vec::new();
+                rows.set_cover(&mut out, &layout, 0, true);
+                write_out(&out);
             }
             if let (Some(frame), Some(_)) = (pending.popup, layout.popup) {
                 self.draw_popup(&frame, &layout);
@@ -842,9 +964,24 @@ impl Renderer {
         }
     }
 
+    fn apply_cover(&self, pending: &Pending, layout: &Layout, rows: &mut Rows, out: &mut Vec<u8>) {
+        let kitty = self.gfx != Gfx::Blocks;
+        if !kitty && pending.cover_peak > rows.cover {
+            rows.set_cover(out, layout, pending.cover_peak, kitty);
+        }
+        match pending.cover {
+            Some(0) if pending.uncover_by_frame && rows.cover > 0 => {
+                rows.uncover_at = Some(Instant::now() + UNCOVER_WAIT)
+            }
+            Some(n) => rows.set_cover(out, layout, n, kitty),
+            None => {}
+        }
+    }
+
     fn write_pending(&self, pending: &Pending, layout: &Layout, rows: &mut Rows) {
         let mut out = Vec::new();
         self.clear_pending(pending, rows, &mut out);
+        self.apply_cover(pending, layout, rows, &mut out);
         out.extend_from_slice(&pending.text);
         if pending.predict != 0 && self.gfx != Gfx::Blocks {
             self.show_prediction(&mut out, layout, rows, pending.predict);
@@ -895,7 +1032,7 @@ impl Renderer {
         let mut keep = HashMap::new();
         for (hash, (w, h, rgb, src)) in std::mem::take(&mut rows.refine) {
             let tiles: Vec<usize> = (0..rows.shown.len())
-                .filter(|&t| rows.shown[t] == Some(hash))
+                .filter(|&t| rows.shown[t] == Some(hash) && !rows.covered(t))
                 .collect();
             let Some(old) = rows.cache.get(&hash).map(|c| c.id) else {
                 continue;
@@ -1106,6 +1243,9 @@ impl Renderer {
             rows.tape.record(&hashes, &rows.fixed, rows.bands, &before);
         }
         // The middle left edge avoids fixed footers when sampling background.
+        if rows.uncover_at.is_some() {
+            rows.uncover_into(&mut out, layout, &hashes);
+        }
         let (br, bg, bb) = pixels.at(1, h as usize / 2);
         rows.bg = [br, bg, bb];
         let (parts, sent, moved) = self.draw_tiles(&mut pixels, layout, rows, &hashes, &mut out);
@@ -1166,6 +1306,9 @@ impl Renderer {
                 continue;
             }
             if self.gfx == Gfx::Blocks {
+                if rows.covered(t) {
+                    continue;
+                }
                 // Cells: the whole row again.
                 let r = (t / rows.bands) as u16;
                 let row = r as usize * rows.bands..(r as usize + 1) * rows.bands;
@@ -1269,7 +1412,12 @@ impl Renderer {
             self.gfx == Gfx::KittyDirect && std::env::var_os("ZWEB_NOPROGRESSIVE").is_none();
         let encode = |p: &Part| {
             let keys = |w: usize, h: usize, src: &str| {
-                format!("a=T,f=24,s={w},v={h},i={},{src}{}", p.id, p.place)
+                format!(
+                    "a={},f=24,s={w},v={h},i={},{src}{}",
+                    if p.show { 'T' } else { 't' },
+                    p.id,
+                    p.place
+                )
             };
             if progressive && p.inner.3 >= 2 {
                 let mut z = ZlibEncoder::new(Vec::new(), Compression::fast());
@@ -1653,6 +1801,137 @@ mod tests {
             rows.shown,
             vec![Some(11), Some(12), Some(13), Some(14), Some(15)]
         );
+    }
+
+    /// Five cached rows on screen, one tile each.
+    fn five_cached_rows() -> (Layout, Rows) {
+        let layout = Layout {
+            rows: 5,
+            cols: 16,
+            ..Layout::default()
+        };
+        let mut rows = Rows::new();
+        rows.shown = (10..15).map(Some).collect();
+        rows.fixed = vec![false; 5];
+        for id in 10..16 {
+            rows.cache.insert(
+                id as u64,
+                Cached {
+                    id,
+                    used: 0,
+                    size: 3,
+                    src: String::new(),
+                },
+            );
+        }
+        (layout, rows)
+    }
+
+    #[test]
+    fn uncover_places_the_covered_tiles_again_from_the_cache() {
+        let (layout, mut rows) = five_cached_rows();
+        let before = rows.shown.clone();
+        let mut out = Vec::new();
+        rows.set_cover(&mut out, &layout, 0, true);
+        assert!(out.is_empty(), "no popup, no output");
+        rows.set_cover(&mut out, &layout, 2, true);
+        assert_eq!(
+            out,
+            b"\x1b_Ga=d,d=i,i=13,p=4,q=2\x1b\\\x1b_Ga=d,d=i,i=14,p=5,q=2\x1b\\"
+        );
+        out.clear();
+        rows.set_cover(&mut out, &layout, 0, true);
+        assert_eq!(rows.shown, before);
+        assert_eq!(out, b"\x1b[4;1H\x1b_Ga=p,i=13,p=4,c=16,r=1,C=1,q=2\x1b\\\x1b[5;1H\x1b_Ga=p,i=14,p=5,c=16,r=1,C=1,q=2\x1b\\");
+    }
+
+    #[test]
+    fn prediction_starts_right_after_uncover() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let (layout, mut rows) = five_cached_rows();
+        let mut out = Vec::new();
+        rows.set_cover(&mut out, &layout, 2, true);
+        rows.set_cover(&mut out, &layout, 0, true);
+        out.clear();
+        renderer.show_prediction(&mut out, &layout, &mut rows, 1);
+        assert!(rows.prediction.is_some());
+        assert_eq!(
+            rows.shown,
+            vec![Some(11), Some(12), Some(13), Some(14), Some(BLANK)]
+        );
+    }
+
+    #[test]
+    fn the_next_frame_places_each_uncovered_tile_once() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let (layout, mut rows) = five_cached_rows();
+        let mut out = Vec::new();
+        rows.set_cover(&mut out, &layout, 2, true);
+        out.clear();
+        rows.uncover_at = Some(Instant::now() + UNCOVER_WAIT);
+        let hashes = [10, 11, 12, 13, 15];
+        rows.uncover_into(&mut out, &layout, &hashes);
+        let mut pixels = Pixels {
+            #[cfg(target_os = "macos")]
+            surface: None,
+            base: [].as_ptr(),
+            stride: 0,
+            w: 0,
+            h: 0,
+        };
+        let (parts, sent, moved) =
+            renderer.draw_tiles(&mut pixels, &layout, &mut rows, &hashes, &mut out);
+        assert!(parts.is_empty());
+        assert_eq!((sent, moved, rows.cover, rows.uncover_at), (0, 1, 0, None));
+        assert_eq!(
+            out,
+            concat!(
+                "\x1b[4;1H\x1b_Ga=p,i=13,p=4,c=16,r=1,C=1,q=2\x1b\\",
+                "\x1b[5;1H\x1b_Ga=p,i=15,p=5,c=16,r=1,C=1,q=2\x1b\\",
+            )
+            .as_bytes()
+        );
+    }
+
+    #[test]
+    fn blocks_need_a_frame_when_the_popup_exposes_rows() {
+        assert!(Gfx::Blocks.uncover_needs_frame(2, 1), "two entries to one");
+        assert!(Gfx::Blocks.uncover_needs_frame(2, 0));
+        assert!(!Gfx::Blocks.uncover_needs_frame(1, 2));
+        assert!(!Gfx::KittyDirect.uncover_needs_frame(2, 1));
+    }
+
+    #[test]
+    fn blocks_popup_opened_and_closed_in_one_batch_redraws_its_rows() {
+        let renderer = Renderer::new(Gfx::Blocks);
+        let (layout, mut rows) = five_cached_rows();
+        renderer.cover(2);
+        renderer.write(b"popup");
+        renderer.cover(0);
+        let (_, pending) = renderer.wait_pending(&rows);
+        let mut out = Vec::new();
+        renderer.apply_cover(&pending, &layout, &mut rows, &mut out);
+        assert_eq!(rows.cover, 0);
+        assert_eq!(rows.shown, vec![Some(10), Some(11), Some(12), None, None]);
+    }
+
+    #[test]
+    fn kitty_popup_opened_and_closed_in_one_batch_leaves_tiles_placed() {
+        let renderer = Renderer::new(Gfx::KittyDirect);
+        let (layout, mut rows) = five_cached_rows();
+        let before = rows.shown.clone();
+        renderer.cover(2);
+        renderer.write(b"popup");
+        renderer.cover(0);
+        let (_, pending) = renderer.wait_pending(&rows);
+        assert_eq!(pending.cover_peak, 2);
+        let mut out = Vec::new();
+        renderer.apply_cover(&pending, &layout, &mut rows, &mut out);
+        let text = String::from_utf8_lossy(&out);
+        assert!(!text.contains("a=d"), "no delete: {text:?}");
+        assert!(!text.contains("a=p"), "no placement: {text:?}");
+        assert_eq!(rows.cover, 0);
+        assert_eq!(rows.shown, before);
     }
 
     #[test]

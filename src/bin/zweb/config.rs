@@ -204,13 +204,27 @@ struct ModeKeys {
     actions: HashMap<Vec<Stroke>, Action>,
     prefixes: HashSet<Stroke>,
     labels: HashMap<Action, Vec<String>>,
+    /// Per prefix: each second key's label and its action's description, sorted.
+    continuations: HashMap<Stroke, Vec<(String, &'static str)>>,
 }
 
 impl ModeKeys {
-    fn add(&mut self, action: Action, label: &str, scope: Scope) -> Result<(), String> {
+    fn add(
+        &mut self,
+        (action, description): (Action, &'static str),
+        label: &str,
+        scope: Scope,
+        leader: Stroke,
+    ) -> Result<(), String> {
         let keys: Vec<Stroke> = label
             .split_whitespace()
-            .map(Stroke::parse)
+            .map(|token| {
+                if token == "Leader" {
+                    Ok(leader)
+                } else {
+                    Stroke::parse(token)
+                }
+            })
             .collect::<Result<_, _>>()?;
         if keys.is_empty() || keys.len() > 2 || (keys.len() == 2 && scope != Scope::Browse) {
             return Err(format!(
@@ -224,6 +238,10 @@ impl ModeKeys {
         }
         if keys.len() == 2 {
             self.prefixes.insert(keys[0]);
+            let second = label.split_whitespace().nth(1).unwrap_or_default();
+            let list = self.continuations.entry(keys[0]).or_default();
+            list.push((second.into(), description));
+            list.sort();
         }
         self.labels.entry(action).or_default().push(label.into());
         Ok(())
@@ -243,6 +261,7 @@ impl ModeKeys {
 
 #[derive(Debug)]
 pub struct Config {
+    leader: String,
     modes: [ModeKeys; 7],
 }
 
@@ -281,7 +300,9 @@ impl Config {
             .parse::<toml::Table>()
             .map_err(|e| e.to_string())?;
         validate_tables(&user)?;
+        let (leader, leader_stroke) = parse_leader(&defaults, &user)?;
         let mut config = Self {
+            leader,
             modes: std::array::from_fn(|_| ModeKeys::default()),
         };
         for &(scope, name) in SCOPES {
@@ -295,7 +316,7 @@ impl Config {
                     .ok_or_else(|| format!("keys.{name} must be a table"))?;
                 table.extend(custom.clone());
             }
-            config.compile_mode(scope, name, &table)?;
+            config.compile_mode(scope, name, &table, leader_stroke)?;
         }
         Ok(config)
     }
@@ -305,13 +326,14 @@ impl Config {
         scope: Scope,
         name: &str,
         table: &toml::Table,
+        leader: Stroke,
     ) -> Result<(), String> {
         let mode = &mut self.modes[scope as usize];
         for (command, value) in table {
-            let action = ACTIONS
+            let (action, description) = ACTIONS
                 .iter()
                 .find(|(key, _, _)| *key == command)
-                .map(|(_, action, _)| *action)
+                .map(|(_, action, description)| (*action, *description))
                 .ok_or_else(|| format!("unknown action keys.{name}.{command}"))?;
             if !allowed(scope, action) {
                 return Err(format!("{command} is not available in {name} mode"));
@@ -323,7 +345,7 @@ impl Config {
                 let key = value
                     .as_str()
                     .ok_or_else(|| format!("keys.{name}.{command} contains a non-string key"))?;
-                mode.add(action, key, scope)
+                mode.add((action, description), key, scope, leader)
                     .map_err(|e| format!("keys.{name}.{command}: {e}"))?;
             }
         }
@@ -354,6 +376,14 @@ impl Config {
         }
     }
 
+    /// The second keys after `prefix`, each with its action's description.
+    pub fn continuations(&self, scope: Scope, prefix: Stroke) -> &[(String, &'static str)] {
+        self.modes[scope as usize]
+            .continuations
+            .get(&prefix)
+            .map_or(&[], Vec::as_slice)
+    }
+
     pub fn labels(&self, scope: Scope, action: Action) -> String {
         self.modes[scope as usize]
             .labels
@@ -368,6 +398,7 @@ impl Config {
         let mut lines = vec![
             "Webskiff keyboard help - configured bindings".into(),
             "Config: ~/.config/webskiff/config.toml (missing entries use repo defaults)".into(),
+            format!("Leader: {}", self.leader),
             format!(
                 "Help: {} scroll; {} page; {} close",
                 self.labels(Scope::Help, Action::ScrollDown),
@@ -399,10 +430,24 @@ impl Config {
     }
 }
 
+fn parse_leader(defaults: &toml::Table, user: &toml::Table) -> Result<(String, Stroke), String> {
+    let value = user.get("leader").unwrap_or(&defaults["leader"]);
+    let label = value.as_str().ok_or("leader must be a single key string")?;
+    let mut tokens = label.split_whitespace();
+    let Some(token) = tokens.next().filter(|_| tokens.next().is_none()) else {
+        return Err(format!("leader must be a single key stroke, got {label:?}"));
+    };
+    let stroke = Stroke::parse(token).map_err(|e| format!("leader: {e}"))?;
+    Ok((token.into(), stroke))
+}
+
 fn validate_tables(user: &toml::Table) -> Result<(), String> {
-    if let Some(name) = user.keys().find(|key| key.as_str() != "keys") {
+    if let Some(name) = user
+        .keys()
+        .find(|key| !matches!(key.as_str(), "keys" | "leader"))
+    {
         return Err(format!(
-            "unknown config section {name:?}; expected [keys.MODE]"
+            "unknown config section {name:?}; expected leader or [keys.MODE]"
         ));
     }
     if let Some(keys) = user.get("keys") {
@@ -489,10 +534,7 @@ mod tests {
 
     fn action(config: &Config, scope: Scope, key: &str) -> Option<Action> {
         let Stroke(code, modifiers) = Stroke::parse(key).unwrap();
-        match config.resolve(scope, KeyEvent::new(code, modifiers), None) {
-            Binding::Action(action) => Some(action),
-            _ => None,
-        }
+        config.action(scope, KeyEvent::new(code, modifiers))
     }
 
     #[test]
@@ -762,5 +804,146 @@ mod tests {
         assert_eq!(action(&config, Scope::Hint, "Enter"), Some(Action::Accept));
         assert!(Config::parse("[keys.hint]\naccept = ['Enter']").is_ok());
         assert!(Config::parse("[keys.browse]\nhints_filter = ['g f']").is_ok());
+    }
+
+    #[test]
+    fn default_leader_is_unbound_and_shown_in_help() {
+        let config = Config::parse("").unwrap();
+        assert!(matches!(
+            config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(',')), None),
+            Binding::Unbound
+        ));
+        assert!(config
+            .help_lines(false)
+            .iter()
+            .any(|line| line.contains("Leader: ,")));
+    }
+
+    #[test]
+    fn default_leader_sequence_resolves_in_browse() {
+        let config = Config::parse("[keys.browse]\nreload = ['Leader r']").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(',')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("expected ',' to be a prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+    }
+
+    #[test]
+    fn custom_leader_overrides_default_leader() {
+        let config = Config::parse("leader = ';'\n[keys.browse]\nreload = ['Leader r']").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(';')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("expected ';' to be a prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+        assert!(matches!(
+            config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(',')), None),
+            Binding::Unbound
+        ));
+        let comma = Stroke::parse(",").unwrap();
+        assert!(!matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(comma)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+        assert!(config
+            .help_lines(false)
+            .iter()
+            .any(|line| line.contains("Leader: ;")));
+    }
+
+    #[test]
+    fn custom_leader_trims_whitespace_and_stores_normalized_label() {
+        let config = Config::parse("leader = ' ; '\n[keys.browse]\nreload = ['Leader r']").unwrap();
+        let prefix = match config.resolve(Scope::Browse, KeyEvent::from(KeyCode::Char(';')), None) {
+            Binding::Prefix(prefix) => prefix,
+            _ => panic!("expected ';' to be a prefix"),
+        };
+        assert!(matches!(
+            config.resolve(
+                Scope::Browse,
+                KeyEvent::from(KeyCode::Char('r')),
+                Some(prefix)
+            ),
+            Binding::Action(Action::Reload)
+        ));
+        assert!(config
+            .help_lines(false)
+            .iter()
+            .any(|line| line == "Leader: ;"));
+    }
+
+    #[test]
+    fn lists_default_g_continuations_with_descriptions() {
+        let config = Config::parse("").unwrap();
+        let g = Stroke::parse("g").unwrap();
+        assert_eq!(
+            config.continuations(Scope::Browse, g),
+            [
+                ("U".to_string(), "Go to the root of the address"),
+                ("[".to_string(), "History back"),
+                ("]".to_string(), "History forward"),
+                ("e".to_string(), "Edit the text field in $EDITOR"),
+                (
+                    "f".to_string(),
+                    "Show hints filtered by link text; digits pick"
+                ),
+                ("g".to_string(), "Go to the top"),
+                ("i".to_string(), "Focus the first text field"),
+                ("u".to_string(), "Go up one level in the address")
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_leader_continuations_with_descriptions() {
+        let config =
+            Config::parse("[keys.browse]\nreload = ['Leader r']\nzoom_in = ['Leader z', '+']")
+                .unwrap();
+        let leader = Stroke::parse(",").unwrap();
+        assert_eq!(
+            config.continuations(Scope::Browse, leader),
+            [
+                ("r".to_string(), "Reload the page"),
+                ("z".to_string(), "Zoom in")
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_and_conflicting_leader_configs() {
+        let conflict =
+            Config::parse("leader = 'Space'\n[keys.browse]\nreload = ['Leader x']").unwrap_err();
+        assert!(
+            conflict.contains("sequence prefix is also bound to a single-key action"),
+            "unexpected error: {conflict}"
+        );
+        let typo = Config::parse("leadr = ';'").unwrap_err();
+        assert!(typo.contains("leader"), "unexpected error: {typo}");
+        for text in [
+            "leader = 42",
+            "leader = 'g g'",
+            "[keys.global]\nreload = ['Leader r']",
+        ] {
+            assert!(Config::parse(text).is_err(), "accepted {text}");
+        }
     }
 }

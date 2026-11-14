@@ -122,8 +122,11 @@ Bindings load at startup from `~/.config/webskiff/config.toml`.
 Override only the actions you want to change:
 
 ```toml
+leader = ","
+
 [keys.browse]
 find = ["/", "s"]
+reload = ["Leader r"]
 
 [keys.global]
 quit = ["Ctrl-Q"]
@@ -131,6 +134,14 @@ quit = ["Ctrl-Q"]
 
 Use `[]` to disable an action. Invalid or conflicting bindings stop startup with
 an error. Restart after editing. Help always shows the configured bindings.
+
+`leader` (default `,`) sets the key that `Leader` means in a binding.
+`Leader r` binds `, r`. Two-key `Leader <key>` sequences work only in `[keys.browse]`, with no timeout.
+The leader is a prefix only if a browse binding uses it. Then it must not also be
+a single-key browse action: `leader = "Space"` plus `Leader x` conflicts with
+`page_down` and stops startup.
+Help shows `Leader: <key>`.
+After a prefix key (`g`, the leader, or your own), a popup lists each next key and its action; `Esc` cancels the prefix and is not sent to the page.
 
 ## Support
 

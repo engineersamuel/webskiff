@@ -30,6 +30,10 @@
         ? `m ${selection.anchorNode.parentElement.id}:${selection.anchorOffset}:${selection}`
         : "keyboard fixture";
     });
+    let escapes = 0;
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") document.title = `escape ${++escapes}`;
+    });
     document.addEventListener("focusin", event => {
       document.title = `focus ${event.target.id}${event.target.type === "password" || event.target.readOnly ? ":" + event.target.value : ""}${event.target.id === "lg" ? " off:" + document.getElementById("off").value : ""}`;
     });

@@ -558,6 +558,8 @@ pub struct App {
     help_offset: usize,
     bindings: Config,
     pending_key: Option<Stroke>,
+    /// Page rows the prefix popup covers on screen now.
+    popup_rows: Cell<u16>,
     zoom: f64,
     scale: u32,
     /// CSS pixels per cell row. The page is a whole number of rows tall and
@@ -617,6 +619,7 @@ impl App {
             help_offset: 0,
             bindings,
             pending_key: None,
+            popup_rows: Cell::new(0),
             zoom: 1.0,
             scale: 1,
             row_css: 16.0,
@@ -831,6 +834,7 @@ impl App {
         if self.prompt.is_some() {
             self.prompt_done(false);
         }
+        self.pending_key = None;
         let index = index.min(self.tabs.len() - 1);
         let old = self.tabs.get_mut(self.active).map(|old| {
             if record && index != self.active && old.nav.restoring() {
@@ -1369,9 +1373,27 @@ impl App {
 
     fn command(&mut self, k: KeyEvent) {
         let prefix = self.pending_key.take();
+        // Esc only cancels a pending prefix.
+        if prefix.is_some() && k.code == KeyCode::Esc {
+            return self.draw();
+        }
         match self.bindings.resolve(Scope::Browse, k, prefix) {
-            Binding::Action(action) => self.browser_command(action),
-            Binding::Prefix(prefix) => self.pending_key = Some(prefix),
+            Binding::Action(action) => {
+                // Kitty: the action's frame places the rows under the popup.
+                if prefix.is_some()
+                    && self.popup_rows.get() > 0
+                    && self.renderer.gfx != crate::render::Gfx::Blocks
+                {
+                    self.popup_rows.set(0);
+                    self.renderer.uncover_by_frame();
+                }
+                self.browser_command(action)
+            }
+            Binding::Prefix(prefix) => {
+                self.pending_key = Some(prefix);
+                self.draw();
+            }
+            Binding::Unbound if prefix.is_some() => self.draw(),
             Binding::Unbound => {}
         }
     }
@@ -2519,7 +2541,49 @@ impl App {
             Print(&stats),
             ResetColor
         );
+        self.draw_prefix_popup(&mut out);
         self.renderer.write(&out);
+    }
+
+    /// The next keys of a pending prefix, in a box above the status line.
+    /// Page tiles are images drawn over text: the renderer leaves those rows
+    /// to text while it is open, and places them again when it closes.
+    fn draw_prefix_popup(&self, out: &mut Vec<u8>) {
+        let l = self.layout();
+        let browsing = self.mode == Mode::Browse && self.prompt.is_none() && !self.help;
+        let entries = match self.pending_key.filter(|_| browsing) {
+            Some(prefix) => self.bindings.continuations(Scope::Browse, prefix),
+            None => &[],
+        };
+        let lines = prefix_popup_lines(entries, (l.cols as usize).saturating_sub(2));
+        let n = (lines.len() as u16).min(l.rows);
+        if n != self.popup_rows.get() {
+            let old = self.popup_rows.replace(n);
+            self.renderer.cover(n);
+            if self.renderer.gfx.uncover_needs_frame(old, n) {
+                if let Some(t) = self.tabs.get(self.active) {
+                    t.view.request_frame();
+                }
+            }
+        }
+        let bg = Color::Rgb {
+            r: 40,
+            g: 40,
+            b: 48,
+        };
+        for (i, line) in lines.iter().take(n as usize).enumerate() {
+            let pad = (l.cols as usize).saturating_sub(line.width() + 1);
+            let row = l.top + l.rows - n + i as u16;
+            let _ = queue!(
+                out,
+                cursor::MoveTo(0, row),
+                SetBackgroundColor(bg),
+                Print(" "),
+                Print(line),
+                Print(" ".repeat(pad)),
+                ResetColor
+            );
+        }
     }
 
     fn status_tag(&self) -> (&'static str, Color) {
@@ -3237,6 +3301,14 @@ mod jumps_tests {
     }
 }
 
+/// One line per next key: the key, then what it does, clipped to `width`.
+fn prefix_popup_lines(entries: &[(String, &str)], width: usize) -> Vec<String> {
+    entries
+        .iter()
+        .map(|(key, description)| clip(&format!("{key}  {description}"), width))
+        .collect()
+}
+
 fn display_char(c: char) -> char {
     if c.is_control() {
         '?'
@@ -3539,6 +3611,24 @@ mod tests {
         let (bytes, status) = yank(&"a".repeat(75_001));
         assert_eq!(bytes, None);
         assert!(status.contains("too large"), "{status}");
+    }
+
+    #[test]
+    fn prefix_popup_lists_each_key_and_description_clipped() {
+        use super::prefix_popup_lines;
+        let entries = [
+            ("g".to_string(), "Go to the top"),
+            ("i".to_string(), "Focus the first text field"),
+        ];
+        assert_eq!(
+            prefix_popup_lines(&entries, 80),
+            ["g  Go to the top", "i  Focus the first text field"]
+        );
+        assert_eq!(
+            prefix_popup_lines(&entries, 10),
+            ["g  Go to t", "i  Focus t"]
+        );
+        assert!(prefix_popup_lines(&[], 80).is_empty());
     }
 
     fn two_pages() -> crate::history::History {
