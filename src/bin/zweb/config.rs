@@ -896,6 +896,10 @@ mod tests {
             config.continuations(Scope::Browse, g),
             [
                 ("e".to_string(), "Edit the text field in $EDITOR"),
+                (
+                    "f".to_string(),
+                    "Show hints filtered by link text; digits pick"
+                ),
                 ("g".to_string(), "Go to the top"),
                 ("i".to_string(), "Focus the first text field")
             ]
