@@ -5,7 +5,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
 rustfmt --check --edition 2021 --config skip_children=true \
-  build.rs src/bin/zweb/cli.rs src/bin/zweb/config.rs src/bin/zweb/input.rs
+  build.rs src/bin/zweb/cli.rs src/bin/zweb/config.rs src/bin/zweb/input.rs src/bin/zweb/jumps.rs
 cargo test --locked --release --all-targets
 cargo clippy --locked --release --all-targets -- -D warnings -A clippy::items_after_test_module
 cargo build --locked --release --bin webskiff

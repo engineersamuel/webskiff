@@ -142,18 +142,24 @@ def percentile(values, fraction):
     return values[min(int(len(values) * fraction), len(values) - 1)] if values else None
 
 
-def wait_for_fixture():
+def wait_for_fixture(text=b"keyboard fixture", keys=None):
     output = bytearray()
     deadline = time.monotonic() + 20
-    terminal = select.poll()
-    terminal.register(fd, select.POLLHUP)
+    if keys is not None:
+        os.write(fd, keys)
     while time.monotonic() < deadline:
-        output.extend(b"".join(data for _, data in pump(0.1)))
-        if b"keyboard fixture" in output:
-            return
-        if terminal.poll(0):
+        if not select.select([fd], [], [], max(0, deadline - time.monotonic()))[0]:
             break
-    raise AssertionError(f"keyboard fixture did not load: {bytes(output[-3000:])!r}")
+        try:
+            data = os.read(fd, 1 << 20)
+        except OSError:
+            break
+        if not data:
+            break
+        output.extend(data)
+        if text in output:
+            return
+    raise AssertionError(f"{text!r} did not appear: {bytes(output[-3000:])!r}")
 
 
 try:
@@ -185,6 +191,15 @@ try:
         press(b"/")
         press(b"\x1b[27u", expected="BROWSE")
         assert termios.tcgetattr(fd)[3] & raw_flags == 0, "raw mode was lost during search"
+        # Jumplist: Ctrl-O goes back and Ctrl-I forward, within a tab and across tabs.
+        press(b"o", expected="OPEN")
+        wait_for_fixture(b"\x1b[7m 1 jump page", (fixture + "?jump").encode() + b"\r")
+        wait_for_fixture(b"keyboard fixture", b"\x1b[111;5u")
+        wait_for_fixture(b"jump page", b"\x1b[105;5u")
+        press(b"t", expected="NEW TAB")
+        wait_for_fixture(b"\x1b[7m 2 keyboard fixture", (fixture + "?tab=2").encode() + b"\r")
+        wait_for_fixture(b"\x1b[7m 1", b"\x1b[111;5u")
+        wait_for_fixture(b"\x1b[7m 2", b"\x1b[105;5u")
         press(b"\x1b[113;5u")
         pump(2)
         assert termios.tcgetattr(fd)[3] & raw_flags == original_flags & raw_flags, "terminal flags were not restored"

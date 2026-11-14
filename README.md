@@ -100,6 +100,7 @@ Press **`?`** or **`F1`** for the full list, generated from your configuration.
 | Select and copy page text | `v`, move, `y` | Mouse select is not possible |
 | Up one address level / address root | `g u` / `g U` | — |
 | Back / forward in history | `H` / `L`, `g [` / `g ]` | `Alt-Left` / `Alt-Right` |
+| Jump back / forward across pages and tabs | `Ctrl-O` / `Ctrl-I` (needs Kitty keyboard enhancement) | |
 | Move through page controls | `Tab` / `Shift-Tab` | `Tab` / `Shift-Tab` |
 | Leave page typing mode | `Esc` | `Esc` |
 | Show keyboard help | `?` | `F1` |
@@ -146,6 +147,7 @@ other terminals and multiplexers need their own acceptance tests.
 
 ### Known limits
 
+- A jump (Ctrl-O/Ctrl-I) can be overtaken by a page load that started before it. The engine's load callback carries no navigation identity, and no exact fix has been found with the current engine API.
 - Some interactions exceed the **10 ms** target. We do not claim constant
   sub-10-ms latency or parity with a desktop browser.
 - Video is experimental. A tested opt-in setting improves local frame delivery
