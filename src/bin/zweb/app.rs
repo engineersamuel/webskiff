@@ -2607,6 +2607,45 @@ mod tests {
     }
 
     #[test]
+    fn hints_read_ahead_before_a_page_commit_are_not_kept_when_they_come_after_it() {
+        let read = |id: &str| {
+            serde_json::to_string(&format!(
+                r#"{{"id":"{id}","png":"P","cells":[],"list":[{{"k":"a"}}]}}"#
+            ))
+            .unwrap()
+        };
+        let kept = |r: &super::ReadAhead| {
+            r.slots
+                .each_ref()
+                .map(|s| s.as_ref().map(|p| (p.0, p.1.clone())))
+        };
+        let mut r = super::ReadAhead::default();
+        let before = r.page;
+        r.read(before, 7, false, &read("old:1"));
+        assert_eq!(kept(&r), [Some((7, "old:1".into())), None]);
+        // A page commits in tab 7; replies started before it come late.
+        r.committed(7);
+        assert_eq!(kept(&r), [None, None]);
+        r.read(before, 7, false, &read("old:2"));
+        r.read(before, 7, true, &read("old:3"));
+        assert_eq!(kept(&r), [None, None]);
+        // Reads of the new page, letters and digits, are kept.
+        let now = r.page;
+        r.read(now, 7, false, &read("new:1"));
+        r.read(now, 7, true, &read("new:2"));
+        assert_eq!(
+            kept(&r),
+            [Some((7, "new:1".into())), Some((7, "new:2".into()))]
+        );
+        // A late reply of the page before does not replace them.
+        r.read(before, 7, true, &read("old:4"));
+        assert_eq!(
+            kept(&r),
+            [Some((7, "new:1".into())), Some((7, "new:2".into()))]
+        );
+    }
+
+    #[test]
     fn filter_keys_typed_while_targets_load_apply_in_order_when_they_arrive() {
         use super::{FilterKey::*, FilterStep::*, HintFilter};
         let hints = filter_hints_of(

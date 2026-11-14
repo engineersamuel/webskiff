@@ -65,6 +65,11 @@ if args.hint_check:
     )
     Path(home.name, "b.html").write_text(
         "<title>page two</title><a href=#s onclick=\"document.title='picked solo';return false\">solo</a>"
+        "<script>addEventListener('keydown',e=>{if(e.key=='w')setTimeout(()=>location.href='c.html',1000)})</script>"
+    )
+    # Page three loads for 1.5 s after it commits.
+    Path(home.name, "c.html").write_text(
+        "<title>slow page</title><a href=#>slow</a><script>const t=Date.now()+1500;while(Date.now()<t);</script>"
     )
     fixture = Path(home.name, "a.html").as_uri()
 pid, fd = pty.fork()
@@ -249,6 +254,19 @@ try:
         drain(b"matches")
         keys(b"s")
         assert b"picked solo" in drain(b"picked solo"), "an accepted letter did not follow the only hint"
+        # F6: a load that commits while `g f` is open reads hints ahead only
+        # once it has finished: one round, letters and digits.
+        arm(b"w")
+        log = Path(home.name) / ".cache/zweb/zweb.log"
+        start = log.stat().st_size
+        keys(b"g", b"f")
+        drain(b"matches")
+        drain(b"slow page")
+        pump(2.5)
+        with log.open("rb") as f:
+            f.seek(start)
+            reads = f.read().count(b"hints prepare\n")
+        assert reads == 2, f"hints read ahead {reads} times (not 2) after a load that committed during g f"
         print("HINT CHECKS PASSED")
         raise SystemExit(0)
     if args.config_check:

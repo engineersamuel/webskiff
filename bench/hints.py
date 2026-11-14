@@ -75,6 +75,23 @@ def identity_self_check():
     assert identity_error(want[:2] + want[:1], want), "a duplicate of the right count passed"
 
 
+def drain_self_check():
+    """An early `0 matches` status line, then the overlay late and in pieces:
+    drain waits for every placement."""
+    status = b"\x1b[40;1Hfilter:   %d matches"
+    script = [status % 0, b"", b"", b"", b"\x1b_Ga=d,d=i,i=3,q=2\x1b\\", b"",
+              b"\x1b_Ga=p,i=3,p=1,x=0,y=0,w=9,h=9\x1b\\" + status % 2, b"", b"",
+              b"\x1b_Ga=p,i=3,p=2,x=0,y=10,w=9,h=9\x1b\\", b"", b""]
+    now = [0.0]
+
+    def read(seconds):
+        now[0] += seconds
+        return script.pop(0) if script else b""
+
+    output = drain(read, clock=lambda: now[0])
+    assert output.count(b"a=p,i=3,") == 2, f"drain ended before every placement: {output!r}"
+
+
 def graphics(raw, state):
     """Kitty graphics commands in `raw`: PNG transmissions (f=100 by a=t, a=T
     or no a=, and their continuation payloads) and hint placements (a=p)."""
@@ -240,6 +257,7 @@ if __name__ == "__main__":
     parser.add_argument("--check", action="store_true", help="require first-f p90 below 10 ms")
     args = parser.parse_args()
     identity_self_check()
+    drain_self_check()
     samples = [sample for _ in range(args.runs) for sample in run(args.binary, args.scale)]
     print(json.dumps({"scale": args.scale, "samples": samples}))
     for action in dict.fromkeys(sample["action"] for sample in samples):
