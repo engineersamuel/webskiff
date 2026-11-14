@@ -2918,7 +2918,7 @@ mod jumps_tests {
         let mut app = restoring();
         app.extents = Some((0.0, 100.0, 200.0));
         app.mode = Mode::Hint;
-        app.prepared = Some((
+        app.prepared.slots[0] = Some((
             1,
             String::new(),
             Hop {
@@ -2932,7 +2932,7 @@ mod jumps_tests {
         assert_eq!(app.tabs[0].url(), "redirected-b");
         assert!(app.extents.is_none());
         assert!(app.mode == Mode::Browse);
-        assert!(app.prepared.is_none());
+        assert!(app.prepared.slots[0].is_none());
         assert!(app.navigation_command(Action::JumpForward));
         assert_eq!(app.tabs[0].nav.current().url, "c");
     }
