@@ -218,7 +218,10 @@ do not silently change the source behind an already published version.
 
 The formula uses Homebrew's standard locked Cargo installation, installs the
 engine beside the executable under `libexec/bin`, and creates an exec wrapper
-at `bin/webskiff`. A plain symlink failed engine startup and is not used.
+at `bin/webskiff`. It installs the verified engine resource directly, rather
+than using the build-script output: Cargo's internal build-directory layout
+can change independently of the engine helper. A plain symlink failed engine
+startup and is not used.
 The example configuration, MIT license, and third-party credits are installed
 under `share/webskiff`. The formula does not change or remove user files.
 
