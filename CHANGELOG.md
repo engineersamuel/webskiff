@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/engineersamuel/webskiff/compare/v0.9.0...v0.9.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* install Homebrew engine from verified resource ([#47](https://github.com/engineersamuel/webskiff/issues/47)) ([7c4e3ef](https://github.com/engineersamuel/webskiff/commit/7c4e3efb6d54ea684b4c13aa432df2829712c996))
+* keep terminal images under herdr's 64 MiB limit ([#46](https://github.com/engineersamuel/webskiff/issues/46)) ([84630a8](https://github.com/engineersamuel/webskiff/commit/84630a843bca55534aa0b70afd3783bd1c6e2709))
+
 ## [0.9.0](https://github.com/engineersamuel/webskiff/compare/v0.8.1...v0.9.0) (2026-11-14)
 
 
