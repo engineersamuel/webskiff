@@ -2932,6 +2932,106 @@ pub fn home() -> &'static str {
     HOME
 }
 
+/// Dispatch regressions run by --selftest with the real engine.
+pub(crate) mod tab_selftest {
+    use super::*;
+
+    const HREF: &str = "about:blank#hint";
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.handle(Msg::Term(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
+    }
+
+    fn selected(app: &App, index: usize, id: u64) -> bool {
+        app.active == index && app.tab().id() == id && app.active_id.get() == id
+    }
+
+    fn hint(app: &mut App, action: char) -> bool {
+        key(app, KeyCode::Char(action));
+        let mut ok = app.mode == Mode::Hint;
+        let list = serde_json::json!([{
+            "k": "ab", "x": 30, "y": 75, "href": HREF, "t": "fixture"
+        }]);
+        app.handle(Msg::Hints {
+            tab: app.tab().id(),
+            session: app.hint_session,
+            reply: HintReply::Targets(Ok(serde_json::to_string(&list.to_string()).unwrap())),
+        });
+        key(app, KeyCode::Char('a'));
+        ok &= app.mode == Mode::Hint;
+        key(app, KeyCode::Char('b'));
+        ok &= app.mode == Mode::Browse && app.hints.is_empty();
+        ok
+    }
+
+    pub fn background_hint(app: &mut App) -> bool {
+        let (index, id, count) = (app.active, app.tab().id(), app.tabs.len());
+        let mut ok = count == 1 && !app.loading() && app.mode == Mode::Browse
+            && selected(app, index, id);
+        ok &= hint(app, 'F');
+        ok &= app.tabs.len() == count + 1 && selected(app, index, id);
+        let new = &app.tabs[count];
+        ok &= new.url() == HREF;
+        let (tab, generation) = (new.id(), new.load_generation.get());
+        let committed = "about:blank#committed";
+        // Finish first so Started must actually change the loading flag.
+        for (event, url, loading) in [
+            (LoadEvent::Finished, HREF, false),
+            (LoadEvent::Started, HREF, true),
+            (LoadEvent::Committed, committed, true),
+            (LoadEvent::Finished, committed, false),
+        ] {
+            app.handle(Msg::Load { tab, generation, event, url: url.into() });
+            ok &= app.tabs[count].loading == loading && app.tabs[count].url() == url;
+            ok &= selected(app, index, id);
+        }
+        app.handle(Msg::Title { tab, title: "background fixture".into() });
+        ok &= app.tabs[count].title == "background fixture" && selected(app, index, id);
+        key(app, KeyCode::Char(']'));
+        ok &= selected(app, count, tab);
+        // Leave the original fixture for subsequent steps, even on regression.
+        if app.active != count {
+            key(app, KeyCode::Char(']'));
+        }
+        key(app, KeyCode::Char('x'));
+        ok
+    }
+
+    pub fn same_tab_hint(app: &mut App) -> bool {
+        let (index, id, count) = (app.active, app.tab().id(), app.tabs.len());
+        let mut ok = app.mode == Mode::Browse && selected(app, index, id);
+        ok &= hint(app, 'f');
+        ok &= app.tabs.len() == count && selected(app, index, id);
+        ok
+    }
+
+    pub fn foreground_tabs(app: &mut App) -> bool {
+        let count = app.tabs.len();
+        let url = "about:blank#prompt";
+        key(app, KeyCode::Char('t'));
+        for c in url.chars() {
+            key(app, KeyCode::Char(c));
+        }
+        key(app, KeyCode::Enter);
+        let mut ok = app.tabs.len() == count + 1 && app.tabs[count].url() == url
+            && selected(app, count, app.tabs[count].id());
+        key(app, KeyCode::Char('x'));
+        ok &= app.tabs.len() == count;
+        let before = app.tabs.len();
+        key(app, KeyCode::Char('X'));
+        ok &= app.tabs.len() == before + 1 && app.tabs[before].url() == url
+            && selected(app, before, app.tabs[before].id());
+        let before = app.tabs.len();
+        let view = View::new_offscreen(None, 800, 600, 1.0).expect("popup view");
+        app.handle(Msg::WindowOpen { view });
+        ok &= app.tabs.len() == before + 1
+            && selected(app, before, app.tabs[before].id());
+        key(app, KeyCode::Char('x'));
+        key(app, KeyCode::Char('x'));
+        ok
+    }
+}
+
 #[cfg(test)]
 mod jumps_tests {
     use super::*;
