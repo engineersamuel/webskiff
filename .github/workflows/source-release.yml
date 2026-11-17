@@ -65,7 +65,7 @@ jobs:
       - name: Prepare the merged release as a draft
         id: draft
         if: ${{ !inputs.verify-only }}
-        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ steps.app.outputs.token }}
           target-branch: ${{ github.ref_name }}
@@ -73,7 +73,7 @@ jobs:
       - name: Prepare a SemVer release PR when no draft was created
         id: please
         if: ${{ inputs.verify-only || steps.draft.outputs.release_created != 'true' }}
-        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ steps.app.outputs.token }}
           target-branch: ${{ github.ref_name }}
