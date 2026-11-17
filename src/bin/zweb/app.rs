@@ -725,6 +725,11 @@ impl App {
     // ---- Tabs ----
 
     pub fn open_tab(&mut self, url: Option<&str>, view: Option<View>) {
+        let index = self.create_tab(url, view);
+        self.switch(index);
+    }
+
+    fn create_tab(&mut self, url: Option<&str>, view: Option<View>) -> usize {
         let l = self.layout();
         let view = match view {
             Some(v) => {
@@ -839,7 +844,7 @@ impl App {
             pending_title: None,
             committed: false,
         });
-        self.switch(self.tabs.len() - 1);
+        self.tabs.len() - 1
     }
 
     fn switch(&mut self, index: usize) {
@@ -2143,7 +2148,7 @@ impl App {
         self.draw();
     }
 
-    /// Follows hint `i`: a click at it, or its link in a new tab.
+    /// Follows hint `i`: a click at it, or its link in a background tab.
     fn pick_hint(&mut self, i: usize) {
         let h = &self.hints[i];
         let (x, y, href, edit) = (h.x, h.y, h.href.clone(), h.edit);
@@ -2151,7 +2156,9 @@ impl App {
         self.clear_hints();
         if self.hint_new_tab {
             if let Some(href) = href {
-                self.open_tab(Some(&href), None);
+                self.create_tab(Some(&href), None);
+                self.draw_tab_picker();
+                self.draw();
                 return;
             }
         }
