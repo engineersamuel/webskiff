@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/engineersamuel/webskiff/compare/v0.9.1...v0.9.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* F opens hint links in a background tab ([#53](https://github.com/engineersamuel/webskiff/issues/53)) ([e4feab2](https://github.com/engineersamuel/webskiff/commit/e4feab296217de3176fa3c728f643f99866f15d6))
+
 ## [0.9.1](https://github.com/engineersamuel/webskiff/compare/v0.9.0...v0.9.1) (2026-11-15)
 
 
