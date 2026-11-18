@@ -68,7 +68,7 @@ actions! {
     FocusInput => "focus_input", "Focus the first text field";
     EditExternal => "edit_external", "Edit the text field in $EDITOR";
     Hints => "hints", "Show link hints";
-    HintsNewTab => "hints_new_tab", "Show hints to open in a new tab";
+    HintsNewTab => "hints_new_tab", "Show hints to open the link in a background tab; the current tab stays active";
     HintsFilter => "hints_filter", "Show hints filtered by link text; digits pick";
     CopyUrl => "copy_url", "Copy the current URL";
     ToggleImages => "toggle_images", "Toggle image placeholders";

@@ -15,7 +15,7 @@ use zebkit::page::DialogPolicy;
 use zebkit::{LoadEvent, View};
 
 use crate::app::{
-    visual_script, yank, App, Msg, Options, APP, FIND_JS, FOCUS_INPUT_JS, HINTS_JS,
+    tab_selftest, visual_script, yank, App, Msg, Options, APP, FIND_JS, FOCUS_INPUT_JS, HINTS_JS,
     VISUAL_START_JS, YANK_JS,
 };
 use crate::config::{Action, Config};
@@ -41,6 +41,7 @@ struct Ctx {
     opened: Cell<bool>,
     dialog: Cell<Option<u64>>,
     measure: Cell<bool>,
+    tab_checks: Cell<bool>,
     fails: Cell<i32>,
     view: RefCell<Option<View>>,
 }
@@ -85,7 +86,9 @@ fn click(view: &View, x: f32, y: f32) {
 }
 
 const APP_PAGE: &str =
-    "data:text/html,<style>*{margin:0}</style><p style='font:16px sans-serif'>hello world</p>";
+    "data:text/html,<style>*{margin:0}</style><p style='font:16px sans-serif'>hello world</p>\
+    <a href='about:blank%23hint' style='position:absolute;left:10px;top:60px;width:120px;height:30px' \
+    onclick='window.clicks=(window.clicks||0)+1;window.clickAt=[event.clientX,event.clientY];return false'>fixture</a>";
 
 /// Gives the app `codes` in one turn, as keys typed together come, then
 /// stores [in Visual mode, the page selection] as `window.<name>` on `report`.
@@ -378,6 +381,40 @@ fn steps() -> Vec<(&'static str, Act, Check)> {
                 APP.with(|a| *a.borrow_mut() = Some(app));
             }),
             Check::Until(|| APP.with(|a| !a.borrow().as_ref().expect("app").loading())),
+        ),
+        (
+            "app: F keeps the active tab through background load/title; ] selects it (AC-1/2)",
+            Box::new(|c, _| {
+                c.tab_checks.set(APP.with(|a| {
+                    tab_selftest::background_hint(a.borrow_mut().as_mut().expect("app"))
+                }));
+            }),
+            Check::Flag(|c| c.tab_checks.get()),
+        ),
+        (
+            "app: f dispatches exactly one click at the hint without adding a tab (AC-3)",
+            Box::new(|_, report| {
+                let (ok, page) = APP.with(|a| {
+                    let mut a = a.borrow_mut();
+                    let app = a.as_mut().expect("app");
+                    (tab_selftest::same_tab_hint(app), app.view())
+                });
+                let report = report.clone();
+                page.evaluate("JSON.stringify([window.clicks,window.clickAt])", move |r| {
+                    let clicked = r.as_deref() == Ok("\"[1,[30,75]]\"");
+                    report.evaluate(&format!("window.hintClick={}", ok && clicked), |_| {});
+                });
+            }),
+            Check::Js("window.hintClick", "true"),
+        ),
+        (
+            "app: t, x/X and WindowOpen still select the appended tab (AC-4)",
+            Box::new(|c, _| {
+                c.tab_checks.set(APP.with(|a| {
+                    tab_selftest::foreground_tabs(a.borrow_mut().as_mut().expect("app"))
+                }));
+            }),
+            Check::Flag(|c| c.tab_checks.get()),
         ),
         (
             "app: v then l at once select two characters in VISUAL",

@@ -38,10 +38,11 @@ prompt restores the original selection and scroll; Escape after it clears the ma
 Ctrl-F leaves its prompt open; Enter/Shift-Enter moves next/previous.
 
 `f` shows link hints; type a hint's letters to follow it. `F` opens the link
-in a new tab. `g f` shows filtered hints: letters filter by link text
-(any case), digits pick fixed labels, and Enter picks the first match. When a
-typed key leaves one match, it is followed at once; Backspace or a key that
-matches nothing never follows a link. Backspace undoes a key; Escape cancels.
+in a background tab; the current tab stays active. `g f` shows filtered hints:
+letters filter by link text (any case), digits pick fixed labels, and Enter
+picks the first match. When a typed key leaves one match, it is followed at once;
+Backspace or a key that matches nothing never follows a link. Backspace undoes
+a key; Escape cancels.
 
 Prompts support arrows, Home/End, Delete/Backspace, paste at the cursor,
 Ctrl-U to clear, and Ctrl-W to delete a word. Focused page text fields receive
