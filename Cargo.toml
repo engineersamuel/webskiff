@@ -28,4 +28,4 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 toml = "1.2"
 
 [build-dependencies]
-zebkit-build = "=0.4.0"
+zebkit-build = "=0.6.0"
