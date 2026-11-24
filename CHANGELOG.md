@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/engineersamuel/webskiff/compare/v0.9.2...v0.9.3) (2026-11-24)
+
+
+### Bug Fixes
+
+* sharpen still photo tiles while other tiles animate ([#55](https://github.com/engineersamuel/webskiff/issues/55)) ([ef692d6](https://github.com/engineersamuel/webskiff/commit/ef692d66950eee75ba8f16a63b6c75a7436f44df))
+
 ## [0.9.2](https://github.com/engineersamuel/webskiff/compare/v0.9.1...v0.9.2) (2026-11-18)
 
 
