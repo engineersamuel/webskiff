@@ -110,7 +110,8 @@ pub struct Hop {
     pub cells: Vec<[u32; 8]>,
     pub dim: [u8; 4],
 }
-/// After this long with no new frame, photo tiles sent blurry are sent sharp.
+/// A photo tile sent blurry is sent sharp once it and the scroll have both
+/// been still this long (animations elsewhere on the page do not hold it back).
 const REFINE_AFTER: Duration = Duration::from_millis(120);
 /// How long closed popup rows wait for the action's frame to place them.
 const UNCOVER_WAIT: Duration = Duration::from_millis(8);
@@ -400,10 +401,10 @@ struct Rows {
     /// Right predictions in a row while not shown.
     hits: u32,
     tape: Tape,
-    /// Photo tiles sent at half size: their full pixels, by hash.
-    refine: HashMap<u64, (usize, usize, Vec<u8>, String)>,
-    /// When the last page frame was drawn.
-    drawn_at: Instant,
+    /// Photo tiles sent at half size: their full pixels and when sent, by hash.
+    refine: HashMap<u64, (usize, usize, Vec<u8>, String, Instant)>,
+    /// When the page last scrolled (the tape moved, or a prediction was shown).
+    scrolled_at: Instant,
     /// Hash of the hint overlay the terminal holds: shown again, it is only placed.
     hop_sent: Option<u64>,
     /// Pixel bytes the terminal holds for the popup and the hint atlas.
@@ -433,7 +434,7 @@ impl Rows {
             hits: 0,
             tape: Tape::default(),
             refine: HashMap::new(),
-            drawn_at: Instant::now(),
+            scrolled_at: Instant::now(),
             hop_sent: None,
             popup_bytes: 0,
             hop_bytes: 0,
@@ -568,16 +569,17 @@ impl Rows {
         }
     }
 
-    fn has_blurry_tiles(&self) -> bool {
-        (0..self.shown.len()).any(|t| {
-            !self.covered(t) && self.shown[t].is_some_and(|h| self.refine.contains_key(&h))
-        })
+    /// When the first blurry tile on screen is due to be sent sharp.
+    fn refine_deadline(&self) -> Option<Instant> {
+        (0..self.shown.len())
+            .filter(|&t| !self.covered(t))
+            .filter_map(|t| self.refine.get(&self.shown[t]?))
+            .map(|r| r.4.max(self.scrolled_at) + REFINE_AFTER)
+            .min()
     }
 
     fn wake_deadline(&self) -> Option<Instant> {
-        let refine = self
-            .has_blurry_tiles()
-            .then(|| self.drawn_at + REFINE_AFTER);
+        let refine = self.refine_deadline();
         let first = self.prediction.as_ref().map(|pr| pr.deadline).or(refine);
         first.into_iter().chain(self.uncover_at).min()
     }
@@ -939,8 +941,8 @@ impl Renderer {
             if let (Some(frame), Some(_)) = (pending.popup, layout.popup) {
                 self.draw_popup(&frame, &layout, &mut rows);
             }
-            let on_screen = rows.has_blurry_tiles();
-            if rows.prediction.is_none() && on_screen && rows.drawn_at.elapsed() >= REFINE_AFTER {
+            let due = rows.refine_deadline().is_some_and(|at| Instant::now() >= at);
+            if rows.prediction.is_none() && due {
                 self.refine(&layout, &mut rows);
             }
         }
@@ -1014,6 +1016,7 @@ impl Renderer {
         self.apply_cover(pending, layout, rows, &mut out);
         out.extend_from_slice(&pending.text);
         if pending.predict != 0 && self.gfx != Gfx::Blocks {
+            rows.scrolled_at = Instant::now();
             self.show_prediction(&mut out, layout, rows, pending.predict);
         }
         // Not over the help screen.
@@ -1060,7 +1063,12 @@ impl Renderer {
         let mut out = Vec::new();
         let mut n = 0;
         let mut keep = HashMap::new();
-        for (hash, (w, h, rgb, src)) in std::mem::take(&mut rows.refine) {
+        let now = Instant::now();
+        for (hash, (w, h, rgb, src, sent)) in std::mem::take(&mut rows.refine) {
+            if now < sent.max(rows.scrolled_at) + REFINE_AFTER {
+                keep.insert(hash, (w, h, rgb, src, sent));
+                continue;
+            }
             let tiles: Vec<usize> = (0..rows.shown.len())
                 .filter(|&t| rows.shown[t] == Some(hash) && !rows.covered(t))
                 .collect();
@@ -1069,7 +1077,7 @@ impl Renderer {
             };
             if tiles.is_empty() {
                 // Not on screen: sharp if it comes back (cached as blurry).
-                keep.insert(hash, (w, h, rgb, src));
+                keep.insert(hash, (w, h, rgb, src, sent));
                 continue;
             }
             let id = rows.next_id;
@@ -1270,7 +1278,11 @@ impl Renderer {
         let hashes = pixels.tile_hashes(layout.rows, layout.cols, rows.bands);
         if self.gfx != Gfx::Blocks {
             let before = rows.shown.clone();
+            let offset = rows.tape.offset;
             rows.tape.record(&hashes, &rows.fixed, rows.bands, &before);
+            if rows.tape.offset != offset {
+                rows.scrolled_at = Instant::now();
+            }
         }
         // The middle left edge avoids fixed footers when sampling background.
         if rows.uncover_at.is_some() {
@@ -1291,7 +1303,6 @@ impl Renderer {
         if out.is_empty() {
             return;
         }
-        rows.drawn_at = Instant::now();
         crate::trace!(
             "frame encoded {} new {} moved {} KB in {:.2} ms",
             sent,
@@ -1391,7 +1402,7 @@ impl Renderer {
                     c.src.clear();
                 }
                 rows.refine
-                    .insert(part.hash, (part.w, part.h, part.rgb, part.src));
+                    .insert(part.hash, (part.w, part.h, part.rgb, part.src, Instant::now()));
             }
         }
         all.extend_from_slice(&out);
@@ -1863,6 +1874,24 @@ mod tests {
             );
         }
         (layout, rows)
+    }
+
+    #[test]
+    fn blurry_tile_is_due_when_it_and_the_scroll_are_still() {
+        let (_, mut rows) = five_cached_rows();
+        let old = Instant::now() - 2 * REFINE_AFTER;
+        rows.scrolled_at = old;
+        let blurry = |sent| (1, 1, vec![0; 3], String::new(), sent);
+        rows.refine.insert(10, blurry(old));
+        assert_eq!(rows.refine_deadline(), Some(old + REFINE_AFTER));
+        // A frame that animates other tiles does not hold it back; a scroll does.
+        let scrolled = Instant::now();
+        rows.scrolled_at = scrolled;
+        assert_eq!(rows.refine_deadline(), Some(scrolled + REFINE_AFTER));
+        // Not on screen: not due.
+        rows.refine.clear();
+        rows.refine.insert(99, blurry(old));
+        assert_eq!(rows.refine_deadline(), None);
     }
 
     #[test]
